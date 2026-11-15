@@ -8,6 +8,8 @@ Brauzer (sayt)  <--WSS-->  SMARS Hub (Railway)  <--WSS-->  SMARS robot × N
 
 Hər robot serverə özü qoşulur (çıxan bağlantı), ona görə router-də port açmaq lazım deyil.
 
+https://smarshub-production.up.railway.app sayta bu linkdən baxa bilərsiniz. 
+
 ## Saytda nələr var
 
 | Səhifə | Nə edir |
