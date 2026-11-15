@@ -1,0 +1,18 @@
+{
+  "name": "smars-control-hub",
+  "version": "2.0.0",
+  "private": true,
+  "description": "SMARS robotları üçün çox-robotlu WebSocket idarəetmə saytı (Railway)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "sim": "node tools/sim-robot.js",
+    "test": "node tools/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

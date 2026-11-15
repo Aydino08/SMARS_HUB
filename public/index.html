@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="SMARS Control Hub — modul SMARS robotlarını internet üzərindən canlı idarə et.">
+<meta name="theme-color" content="#060a0f">
+<title>SMARS Control Hub</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Orbitron:wght@600;800&family=Share+Tech+Mono&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="nav">
+  <div class="nav-in">
+    <a href="/" data-link class="brand"><span class="logo">⬡</span> SMARS <b>HUB</b></a>
+    <button class="burger" id="burger" aria-label="Menyu">☰</button>
+    <nav class="links" id="links">
+      <a href="/" data-link data-nav="home">Ana səhifə</a>
+      <a href="/robots" data-link data-nav="robots">Robotlar</a>
+      <a href="/guide" data-link data-nav="guide">Qoşulma</a>
+      <a href="/about" data-link data-nav="about">Haqqında</a>
+      <span class="conn-pill" id="connPill" title="Server bağlantısı">● oflayn</span>
+      <button class="btn-ghost sm" id="logoutBtn" hidden>Çıxış</button>
+    </nav>
+  </div>
+</header>
+
+<main id="app" class="app"></main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <div>
+      <div class="brand small"><span class="logo">⬡</span> SMARS <b>HUB</b></div>
+      <p class="muted">Modul SMARS robotları üçün canlı idarəetmə mərkəzi.</p>
+    </div>
+    <div class="foot-links">
+      <a href="/" data-link>Ana səhifə</a>
+      <a href="/robots" data-link>Robotlar</a>
+      <a href="/guide" data-link>Qoşulma bələdçisi</a>
+      <a href="/about" data-link>Haqqında</a>
+    </div>
+    <div class="muted small">© <span id="year"></span> SMARS Hub</div>
+  </div>
+</footer>
+
+<div id="toasts" class="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>
