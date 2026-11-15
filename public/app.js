@@ -202,6 +202,7 @@
     [/^\/$/, HomePage, 'home', false],
     [/^\/robots\/?$/, RobotsPage, 'robots', true],
     [/^\/robot\/([A-Za-z0-9_-]{1,32})\/?$/, ControlPage, 'robots', true],
+    [/^\/sim\/?$/, SimPage, 'sim', false],
     [/^\/guide\/?$/, GuidePage, 'guide', false],
     [/^\/about\/?$/, AboutPage, 'about', false],
   ];
@@ -283,6 +284,7 @@
        lazım olan funksiyaları özün seçirsən.</p>
     <div class="row">
       <a class="btn" href="/robots" data-link>Robotlara bax →</a>
+      <a class="btn-ghost" href="/sim" data-link>🕹 3D simulyasiyanı sına</a>
       <a class="btn-ghost" href="/guide" data-link>Robotu necə qoşum?</a>
     </div>
     <div class="stats">
@@ -459,15 +461,186 @@
     };
   }
 
+  // ---------------------------------------------------------------- transports
+  // İdarə paneli robotla "transport" vasitəsilə danışır: real robot (Hub/WebSocket) və ya brauzer simulyasiyası.
+  function hubTransport(id) {
+    return {
+      isSim: false, back: '/robots', backLabel: 'Robotlar',
+      api: (url) => Hub.api(id, url),
+      json: (url) => Hub.json(id, url),
+      robot: () => Hub.robot(id),
+      ready: () => Hub.authed,
+      on: (fn) => Hub.on(fn),
+      watch: (on) => Hub.watch(on ? id : null),
+      saveProfile: (data) => Hub.send({ t: 'profile', r: id, data }),
+      forget: () => Hub.send({ t: 'forget', r: id }),
+    };
+  }
+
+  function simTransport(getSim) {
+    const subs = new Set();
+    const since = Date.now();
+    let simRef = null;
+    getSim().then((s) => { simRef = s; }).catch(() => {});
+    const emit = (t) => subs.forEach((f) => { try { f(t); } catch (e) { console.error(e); } });
+    const defProfile = (c) => ({
+      name: '', color: c === 'B' ? '#ffcc00' : '#00e5ff',
+      modes: { obstacle: true, line: c !== 'B', arena: true },
+      modules: { ir: c !== 'B', distance: true, servo: true, settings: true },
+      hiddenGroups: c === 'B' ? ['line'] : [], updated: 0,
+    });
+    const load = (c) => {
+      try { const p = JSON.parse(localStorage.getItem('smarsSimProfile_' + c) || 'null'); if (p) return { ...defProfile(c), ...p }; } catch (_) { /* */ }
+      return defProfile(c);
+    };
+    let cfg = 'A';
+    let prof = load(cfg);
+    const allowed = (m) => { const d = MODES_FALLBACK.find((x) => x.id === m); return !!d && (d.id === 0 || prof.modes[d.key] !== false); };
+    const deny = (msg) => Promise.reject(Object.assign(new Error(msg), { code: 403 }));
+    const T = {
+      isSim: true, back: '/', backLabel: 'Ana səhifə',
+      api(url) {
+        const qi = url.indexOf('?');
+        const p = qi < 0 ? url : url.slice(0, qi);
+        const q = {};
+        if (qi >= 0) new URLSearchParams(url.slice(qi + 1)).forEach((v, k) => { q[k] = v; });
+        // real serverdəki kimi: söndürülmüş rejim / modul bloklanır
+        if (p === '/mode' && !allowed(parseInt(q.m, 10))) return deny('bu mod bu robot üçün söndürülüb');
+        if (p === '/servo' && prof.modules.servo === false) return deny('servo modulu söndürülüb');
+        return getSim().then((sim) => {
+          const [c, d] = sim.handle(p, q);
+          if (c >= 200 && c < 300) return d;
+          throw Object.assign(new Error(String(d)), { code: c });
+        });
+      },
+      json(url) { return T.api(url); },
+      robot() {
+        return {
+          id: 'sim', on: true, name: prof.name || 'Virtual SMARS', fw: 'sim-3d · ' + cfg, since, rtt: 0, viewers: 1,
+          lastSeen: Date.now(), last: { mode: simRef ? simRef.mode : 0 }, profile: prof,
+        };
+      },
+      ready: () => true,
+      on(fn) { subs.add(fn); return () => subs.delete(fn); },
+      watch() {},
+      forget() {},
+      saveProfile(data) {
+        prof = { ...prof, ...data, updated: Date.now() };
+        try { localStorage.setItem('smarsSimProfile_' + cfg, JSON.stringify(prof)); } catch (_) { /* */ }
+        getSim().then((sim) => { if (!allowed(sim.mode)) sim.handle('/mode', { m: '0' }); });
+        toast('Fərdiləşdirmə yadda saxlanıldı (bu brauzerdə).', 'ok');
+        emit('robots');
+      },
+      setConfig(c) { cfg = c; prof = load(c); emit('robots'); },
+    };
+    return T;
+  }
+
+  // ---------------------------------------------------------------- simulation page
+  function SimPage() {
+    let sim = null, statsT = null, ctrl = null, dead = false;
+    let resolveSim, rejectSim;
+    const simP = new Promise((res, rej) => { resolveSim = res; rejectSim = rej; });
+    simP.catch(() => {});
+    const T = simTransport(() => simP);
+    const saved = (() => { try { return JSON.parse(localStorage.getItem('smarsSimUi') || '{}'); } catch (_) { return {}; } })();
+    const ui = { scene: saved.scene || 'line', config: saved.config || 'A', cam: 'follow', helpers: saved.helpers !== false };
+    const saveUi = () => { try { localStorage.setItem('smarsSimUi', JSON.stringify(ui)); } catch (_) { /* */ } };
+    T.setConfig(ui.config);
+    ctrl = ControlPage('sim', T);
+    const SC = { line: 'Xətt trası', obstacle: 'Maneələr', arena: 'Arena (kub çıxar)' };
+    const CAMS = { follow: 'İzlə', chase: 'Arxadan', top: 'Yuxarıdan', fpv: 'Sensor gözü' };
+    return {
+      title: 'Simulyasiya',
+      html: `
+<div class="page-head">
+  <div><div class="crumbs">SMARS Hub</div><h1>3D simulyasiya</h1>
+    <p class="muted">SMARS-ın CAD modeli (gövdə, təkərlər, tırtıl, TCRT5000 kaseti, kürək, ultrasəs korpusu) brauzerdə.
+      Aşağıdakı panel real robotun paneli ilə eynidir — sür, rejimləri və ayarları sına. Giriş tələb olunmur.</p></div>
+</div>
+<div class="sim-view" id="simView">
+  <div class="sim-loading" id="simLoading">3D model yüklənir…</div>
+  <div class="sim-hud">
+    <div class="hud-box">
+      <select class="input sm" id="simScene">${Object.entries(SC).map(([k, v]) => `<option value="${k}" ${k === ui.scene ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
+      <select class="input sm" id="simCfg"><option value="A" ${ui.config === 'A' ? 'selected' : ''}>TCRT5000 ×3 + kürək + HC-SR04</option>
+        <option value="B" ${ui.config === 'B' ? 'selected' : ''}>Kürək + HC-SR04 (IR-sız)</option></select>
+      <button class="btn-ghost sm" id="simReset" title="Səhnəni və robotu yenidən qur">⟲ Sıfırla</button>
+    </div>
+    <div class="hud-box seg" id="simCams">
+      ${Object.entries(CAMS).map(([k, v]) => `<button class="btn-ghost sm ${k === ui.cam ? 'active' : ''}" data-cam="${k}">${esc(v)}</button>`).join('')}
+      <label class="chk small"><input type="checkbox" id="simHelpers" ${ui.helpers ? 'checked' : ''}> sensorlar</label>
+    </div>
+  </div>
+  <div class="sim-stats" id="simStats"></div>
+</div>
+<p class="muted small" style="margin:8px 2px 0">Kamera: siçanla fırlat / sağ düymə ilə sürüşdür / təkərlə yaxınlaşdır. Sürmək: ↑ ↓ ← → və ya WASD.
+  Servo qolu və Arduino lövhəsi sxematikdir (CAD-də yoxdur).</p>
+<div style="margin-top:22px">${ctrl.html}</div>`,
+      mount(app) {
+        ctrl.mount(app);
+        const view = $('#simView', app);
+        // window.__smarsSimTest — yalnız avtomatik testlər üçün (headless simulyator ötürmək)
+        const hook = window.__smarsSimTest || null;
+        const load = hook && hook.load ? hook.load : () => import('/sim3d.js');
+        load().then((m) => m.createSim(view, { scene: ui.scene, config: ui.config, ...(hook ? hook.opts : {}) }))
+          .then((s) => {
+            if (dead) { s.destroy(); return; }
+            sim = s; resolveSim(s);
+            if (hook) hook.instance = s;
+            $('#simLoading', app).remove();
+            sim.setCamera(ui.cam);
+            sim.setHelpers(ui.helpers);
+          })
+          .catch((e) => {
+            console.error(e);
+            rejectSim(e);
+            const l = $('#simLoading', app);
+            if (l) l.textContent = '3D başlamadı: ' + (e && e.message ? e.message : e) + ' (WebGL dəstəklənmir?)';
+          });
+        $('#simScene', app).addEventListener('change', (e) => { ui.scene = e.target.value; saveUi(); if (sim) sim.setScene(ui.scene); });
+        $('#simCfg', app).addEventListener('change', (e) => {
+          ui.config = e.target.value; saveUi();
+          if (sim) sim.setConfig(ui.config);
+          T.setConfig(ui.config);
+        });
+        $('#simReset', app).addEventListener('click', () => { if (sim) sim.reset(); });
+        $('#simCams', app).addEventListener('click', (e) => {
+          const b = e.target.closest('[data-cam]');
+          if (!b) return;
+          ui.cam = b.dataset.cam;
+          $$('[data-cam]', app).forEach((x) => x.classList.toggle('active', x === b));
+          if (sim) sim.setCamera(ui.cam);
+        });
+        $('#simHelpers', app).addEventListener('change', (e) => { ui.helpers = e.target.checked; saveUi(); if (sim) sim.setHelpers(ui.helpers); });
+        statsT = setInterval(() => {
+          if (!sim) return;
+          const i = sim.info();
+          $('#simStats', app).innerHTML =
+            `<span>${i.fps} fps</span><span>x ${i.x} · z ${i.z} mm</span><span>${i.h}°</span><span>${i.v} mm/s</span>` +
+            (i.stalled ? '<span class="warn">⛔ ilişib</span>' : '') +
+            (i.cubes ? `<span>kub çıxarılıb: <b>${i.out}/${i.cubes}</b></span>` : '');
+        }, 250);
+      },
+      unmount() {
+        dead = true;
+        clearInterval(statsT);
+        if (ctrl) ctrl.unmount();
+        if (sim) sim.destroy();
+      },
+    };
+  }
+
   // ---------------------------------------------------------------- control page
-  function ControlPage(id) {
+  function ControlPage(id, T) {
+    T = T || hubTransport(id);
     const st = {
       online: false, mode: 0, lastSwitch: 0, tLast: '', active: null, repT: null, pollT: null, pollBusy: false,
       BYK: {}, groups: [], settingsLoaded: false, settingsBusy: false, profKey: '', draft: null, dirty: false,
       thrT: {}, thrL: {}, setT: {}, cleanup: [],
     };
-    const api = (url) => Hub.api(id, url);
-    const robot = () => Hub.robot(id);
+    const api = (url) => T.api(url);
+    const robot = () => T.robot();
     const profile = () => { const r = robot(); return (r && r.profile) || { modes: {}, modules: {}, hiddenGroups: [], color: '#00e5ff', name: '' }; };
     const modeAllowed = (m) => { const d = Hub.modes.find((x) => x.id === m); return !!d && (d.id === 0 || profile().modes[d.key] !== false); };
     const modOn = (k) => profile().modules[k] !== false;
@@ -502,10 +675,10 @@
       const on = !!(r && r.on);
       const pill = $('#cOn', app);
       pill.className = 'pill ' + (on ? 'on' : 'off');
-      pill.textContent = on ? '● ONLAYN' : (Hub.authed ? '○ OFLAYN' : '○ QOŞULUR');
+      pill.textContent = on ? (T.isSim ? '● SİMULYASİYA' : '● ONLAYN') : (T.ready() ? '○ OFLAYN' : '○ QOŞULUR');
       $('#cViewers', app).textContent = r && r.viewers > 1 ? `👁 ${r.viewers} nəfər baxır` : '';
       $('#cRtt', app).textContent = r && r.on && r.rtt != null ? r.rtt + ' ms' : '';
-      $('#offBanner', app).hidden = on || !Hub.authed;
+      $('#offBanner', app).hidden = on || !T.ready();
       $('#offBanner', app).innerHTML = r
         ? `Robot hazırda oflayndır (son görülmə: ${esc(ago(r.lastSeen))}). Qoşulan kimi panel avtomatik aktivləşəcək.`
         : 'Bu ID ilə robot tapılmadı. Robot qoşulan kimi burada görünəcək.';
@@ -646,7 +819,7 @@
     function loadSettings() {
       if (st.settingsBusy) return;
       st.settingsBusy = true;
-      Hub.json(id, '/settings').then((d) => { st.settingsBusy = false; buildSettings(d); })
+      T.json('/settings').then((d) => { st.settingsBusy = false; buildSettings(d); })
         .catch(() => { st.settingsBusy = false; if (st.online) setTimeout(loadSettings, 2000); });
     }
 
@@ -654,7 +827,7 @@
     function poll() {
       if (!st.online || st.pollBusy || document.hidden) return;
       st.pollBusy = true;
-      Hub.json(id, '/status').then((d) => {
+      T.json('/status').then((d) => {
         if (d.mode !== undefined && d.mode !== st.mode && Date.now() - st.lastSwitch > 1500) applyModeUI(d.mode);
         if (d.tankSpd !== undefined) { $('#tspd', app).textContent = d.tankSpd; if (document.activeElement !== $('#spd', app)) { setRange($('#spd', app), d.tankSpd); $('#spdO', app).textContent = d.tankSpd; } }
         $('#svInd', app).textContent = d.sv === 1 ? '✓ saxlanıldı' : d.sv === 0 ? '… saxlanılır' : '';
@@ -688,7 +861,7 @@
 
     function onOnline() {
       st.settingsLoaded = false;
-      Hub.json(id, '/status').then((d) => { if (d.mode !== undefined) applyModeUI(d.mode); }).catch(() => {});
+      T.json('/status').then((d) => { if (d.mode !== undefined) applyModeUI(d.mode); }).catch(() => {});
       loadSettings();
     }
 
@@ -751,13 +924,13 @@
     return {
       title: id,
       html: `
-<div class="crumbs"><a href="/robots" data-link>Robotlar</a> / <span id="cCrumb">${esc(id)}</span></div>
+<div class="crumbs"><a href="${T.back}" data-link>${esc(T.backLabel)}</a> / <span id="cCrumb">${esc(id)}</span></div>
 <div class="ctrl-head">
   <div class="ravatar" id="cAvatar">?</div>
   <div><h1 id="cName">${esc(id)}</h1>
     <div class="row" style="margin-top:4px"><span class="rid">${esc(id)}</span>
       <span class="pill off" id="cOn">○</span><span class="muted small" id="cRtt"></span><span class="muted small" id="cViewers"></span></div></div>
-  <div class="right"><a class="btn-ghost sm" href="/robots" data-link>← Bütün robotlar</a></div>
+  <div class="right" ${T.isSim ? 'hidden' : ''}><a class="btn-ghost sm" href="/robots" data-link>← Bütün robotlar</a></div>
 </div>
 <div class="tabs" id="tabs">
   <button data-tab="control" class="active">🎮 İdarəetmə</button>
@@ -855,7 +1028,7 @@
 <section data-pane="info" hidden>
   <div class="grid g2">
     <div class="card"><h3>Robot</h3><dl class="kv" id="infoKv"></dl></div>
-    <div class="card"><h3>Təhlükə zonası</h3>
+    <div class="card" ${T.isSim ? 'hidden' : ''}><h3>Təhlükə zonası</h3>
       <p class="muted small" style="margin-bottom:12px">Oflayn robotu siyahıdan və profilini serverdən sil. Robot yenidən qoşulsa, default profillə geri gələcək.</p>
       <button class="btn-ghost warn" id="forgetBtn">Robotu siyahıdan sil</button></div>
   </div>
@@ -863,7 +1036,7 @@
 
       mount(root) {
         app = root;
-        Hub.watch(id);
+        T.watch(true);
 
         // tabs
         listen($('#tabs', app), 'click', (e) => {
@@ -948,7 +1121,7 @@
           if (!g) return;
           const all = g.dataset.rgroup === 'all';
           if (!confirm(all ? 'Bütün ayarlar default-a qaytarılsın?' : 'Bu qrupun ayarları default-a qaytarılsın?')) return;
-          api('/reset?g=' + encodeURIComponent(g.dataset.rgroup)).then(() => Hub.json(id, '/settings'))
+          api('/reset?g=' + encodeURIComponent(g.dataset.rgroup)).then(() => T.json('/settings'))
             .then((d) => (d.s || []).forEach((s) => reflect(s.k, s.v))).catch((er) => toast('Sıfırlanmadı: ' + er.message, 'error'));
         });
 
@@ -976,21 +1149,21 @@
           }
         });
         listen($('#pSave', app), 'click', () => {
-          Hub.send({ t: 'profile', r: id, data: { name: st.draft.name, color: st.draft.color, modes: st.draft.modes, modules: st.draft.modules, hiddenGroups: st.draft.hiddenGroups } });
+          T.saveProfile({ name: st.draft.name, color: st.draft.color, modes: st.draft.modes, modules: st.draft.modules, hiddenGroups: st.draft.hiddenGroups });
           st.dirty = false;
           $('#saveState', app).textContent = 'Göndərilir…';
         });
         listen($('#pReset', app), 'click', () => loadDraft());
         listen($('#forgetBtn', app), 'click', () => {
           if (!confirm('Robot siyahıdan silinsin?')) return;
-          Hub.send({ t: 'forget', r: id });
+          T.forget();
           go('/robots');
         });
 
         // hub updates
         const sync = () => {
           const r = robot();
-          const on = !!(r && r.on && Hub.authed);
+          const on = !!(r && r.on && T.ready());
           if (on && !st.online) { st.online = true; onOnline(); }
           if (!on && st.online) { st.online = false; stopRepeat(); st.tLast = ''; }
           $('#dpad', app).classList.toggle('disabled', !on || st.mode !== 0);
@@ -998,7 +1171,7 @@
           if (key !== st.profKey) { st.profKey = key; applyProfile(); }
           drawHeader();
         };
-        st.cleanup.push(Hub.on((t) => { if (t === 'robots' || t === 'auth' || t === 'conn') sync(); }));
+        st.cleanup.push(T.on((t) => { if (t === 'robots' || t === 'auth' || t === 'conn') sync(); }));
         st.pollT = setInterval(poll, 600);
         st.infoT = setInterval(() => { drawInfo(); }, 5000);
         applyModeUI(0);
@@ -1012,7 +1185,7 @@
         Object.values(st.thrT).forEach(clearTimeout);
         Object.values(st.setT).forEach(clearTimeout);
         st.cleanup.forEach((f) => f());
-        Hub.watch(null);
+        T.watch(false);
       },
     };
   }

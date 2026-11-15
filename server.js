@@ -22,6 +22,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { WebSocketServer } = require('ws');
 
 // ---------------------------------------------------------------- config
@@ -202,19 +203,38 @@ const SEC_HEADERS = {
     "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
-function sendFile(res, file, method, status = 200) {
-  fs.readFile(file, (err, buf) => {
-    if (err) {
+const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.json', '.svg', '.bin', '.txt']);
+const gzCache = new Map();          // fayl + mtime -> gzip buffer (statik fayllar dəyişmir)
+
+function sendFile(req, res, file, status = 200) {
+  fs.stat(file, (serr, stat) => {
+    if (serr || !stat.isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SEC_HEADERS });
       return res.end('Not found');
     }
-    const ext = path.extname(file).toLowerCase();
-    res.writeHead(status, {
-      'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache',
-      ...SEC_HEADERS,
+    fs.readFile(file, (err, buf) => {
+      if (err) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SEC_HEADERS });
+        return res.end('Not found');
+      }
+      const ext = path.extname(file).toLowerCase();
+      const headers = {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache',
+        ...SEC_HEADERS,
+      };
+      let body = buf;
+      if (COMPRESSIBLE.has(ext) && buf.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+        const key = file + ':' + stat.mtimeMs;
+        body = gzCache.get(key);
+        if (!body) { body = zlib.gzipSync(buf, { level: 9 }); gzCache.set(key, body); }
+        headers['Content-Encoding'] = 'gzip';
+        headers['Vary'] = 'Accept-Encoding';
+      }
+      headers['Content-Length'] = body.length;
+      res.writeHead(status, headers);
+      res.end(req.method === 'HEAD' ? undefined : body);
     });
-    res.end(method === 'HEAD' ? undefined : buf);
   });
 }
 
@@ -244,7 +264,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(403, SEC_HEADERS);
       return res.end();
     }
-    return sendFile(res, file, req.method);
+    return sendFile(req, res, file);
   }
 
   // SPA səhifələri: /, /robots, /robot/<id>, /about, /guide ... hamısı index.html
@@ -252,7 +272,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SEC_HEADERS });
     return res.end('Not found');
   }
-  return sendFile(res, path.join(PUBLIC_DIR, 'index.html'), req.method);
+  return sendFile(req, res, path.join(PUBLIC_DIR, 'index.html'));
 });
 
 // ---------------------------------------------------------------- WebSocket state

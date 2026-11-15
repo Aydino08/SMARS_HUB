@@ -1,0 +1,10 @@
+numpy
+trimesh
+manifold3d
+lxml
+shapely
+scipy
+rtree
+matplotlib
+pillow
+fast-simplification

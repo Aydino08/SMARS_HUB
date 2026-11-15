@@ -215,6 +215,20 @@ details.card[open]>summary{color:var(--acc);margin-bottom:14px}
 .sw.sel{border-color:#fff;box-shadow:0 0 0 2px var(--c)}
 .save-bar{display:flex;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
 
+/* simulation */
+.sim-view{position:relative;height:min(64vh,640px);min-height:340px;border-radius:14px;overflow:hidden;border:1px solid var(--brd);background:#0a1118;box-shadow:var(--shadow)}
+.sim-view canvas{display:block;width:100%;height:100%;touch-action:none}
+.sim-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);padding:20px;text-align:center}
+.sim-hud{position:absolute;top:10px;left:10px;right:10px;display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;pointer-events:none}
+.sim-hud>*{pointer-events:auto}
+.hud-box{background:rgba(6,10,15,.8);backdrop-filter:blur(6px);border:1px solid var(--brd);border-radius:10px;padding:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.input.sm{padding:6px 8px;font-size:.82rem}
+.seg .btn-ghost.active{border-color:var(--acc);color:var(--acc);background:#00222e}
+.sim-stats{position:absolute;left:10px;bottom:10px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.sim-stats span{font-family:var(--mono);font-size:.75rem;background:rgba(6,10,15,.8);border:1px solid var(--brd);border-radius:7px;padding:3px 8px;color:var(--muted)}
+.sim-stats b{color:var(--grn);font-weight:400}
+.sim-stats .warn{color:var(--danger)}
+
 /* doc pages */
 .doc{max-width:860px}
 .doc h2{font-family:var(--disp);letter-spacing:1px;font-size:1.15rem;margin:34px 0 10px}

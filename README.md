@@ -15,6 +15,7 @@ Hər robot serverə özü qoşulur (çıxan bağlantı), ona görə router-də p
 | **Ana səhifə** `/` | Layihə haqqında, onlayn robot sayı, necə işləyir |
 | **Robotlar** `/robots` | WebSocket ilə qoşulan bütün SMARS-ların canlı siyahısı. Hər kartda rejim, məsafə, Wi-Fi, gecikmə və neçə nəfərin baxdığı görünür. Axtarış və "yalnız onlayn" filtri var |
 | **İdarəetmə** `/robot/<id>` | Seçilmiş robotu idarə etmək üçün səhifə (aşağıda ətraflı) |
+| **Simulyasiya** `/sim` | Brauzerdə 3D SMARS: real robotun bütün funksiyaları, giriş tələb etmir (aşağıda ətraflı) |
 | **Qoşulma** `/guide` | Railway deploy, firmware qoşulması, protokol, problemlər |
 | **Haqqında** `/about` | SMARS və platforma haqqında |
 
@@ -38,6 +39,42 @@ Hər robot serverə özü qoşulur (çıxan bağlantı), ona görə router-də p
 * **Məlumat tabı:** firmware, nə vaxtdan qoşulub, gecikmə, Wi-Fi. Oflayn robotu siyahıdan silmək
   də buradandır.
 
+## 3D simulyasiya (`/sim`)
+
+Robot modeli SMARS CAD fayllarından gəlir: `chassis_SL`, master/slave təkərlər, `mechanical_track`
+halqaları, TCRT5000 kaseti, kürək və orijinal ultrasəs korpusu. Fayllar `public/models/smars.bin`
+və `smars.json`-dadır. Arduino lövhəsi və servo qolu sxematikdir, çünki onlar CAD-də yoxdur.
+
+Simulyasiya **real robotla eyni protokolla** işləyən virtual robotdur
+(`/status /mode /tank /servo /settings /set /reset`). Ona görə idarə paneli dəyişmədən ona qoşulur:
+D-pad, klaviatura, sürət, rejimlər, HC-SR04, IR, servo, ayarlar və fərdiləşdirmə hamısı eyni işləyir.
+
+| Nə | Necə simulyasiya olunur |
+|---|---|
+| Sürmə | Tank (differensial) kinematikası. Tırtıl halqaları və təkərlər hərəkətə uyğun fırlanır. Əl rejimində 0.7 san əmr gəlməsə robot dayanır (ölü-adam dayanması) |
+| HC-SR04 | ±15° konus, 2–400 sm, ~16 Hz. Obyektin hündürlüyü nəzərə alınır. 2 sm-dən yaxın kor zona var (999) |
+| TCRT5000 ×3 | Hər sensor yerin rəngini öz CAD mövqeyindən (±16.1 mm, 68 mm irəlidə) oxuyur, faiz və qara/ağ olaraq |
+| Toqquşma | Gövdə, tırtıllar və U-kürəyin qanadları divar və maneələrə dəyir. Kublar kürəklə itələnir |
+| Rejimlər | Əl idarəsi; maneədən qaçma (geri çəkil + dön, bamper kimi ilişmə); line following (3 sensor); arena (kubu tap → tuşla → itələ, kənarı IR ilə gör) |
+
+Səhnələr: **Xətt trası**, **Maneələr**, **Arena (kub çıxar)**.
+
+Konfiqurasiyalar:
+* **A:** TCRT5000 ×3 + kürək + HC-SR04.
+* **B:** kürək + HC-SR04, IR sensoru yoxdur. Bu konfiqurasiyada line following olmur (409).
+
+Kamera rejimləri: izlə, arxadan, yuxarıdan, sensor gözü. Ayarlar və fərdiləşdirmə brauzerin
+`localStorage`-ında saxlanılır.
+
+Modelləri CAD-dən yenidən yaratmaq üçün (`cad-tools/`):
+
+```bash
+pip install -r cad-tools/requirements.txt
+python cad-tools/extract_3mf.py /yol/SMARS.3mf
+# (make_combo3.py, make_kurek4.py — kürək hissələri), sonra:
+python cad-tools/export_web_models.py public/models
+```
+
 ## Fayllar
 
 | Fayl | Nə üçündür |
@@ -47,7 +84,12 @@ Hər robot serverə özü qoşulur (çıxan bağlantı), ona görə router-də p
 | `railway.json` | Railway: start əmri, `/healthz` healthcheck, restart siyasəti |
 | `tools/sim-robot.js` | Virtual SMARS robot(lar): real robotsuz sınaq üçün |
 | `tools/smoke-test.js` | `npm test`: server + robotlar + UI üçün 36 avtomatik yoxlama |
-| `tools/dom-check.js` | (istəyə bağlı) saytı jsdom-da real serverlə sınayır, 45 yoxlama. `jsdom` tələb edir |
+| `public/sim3d.js` | 3D simulyator: səhnə, fizika, sensorlar, virtual firmware |
+| `public/models/` | SMARS CAD modelləri (sadələşdirilmiş) + yerləşmə məlumatı |
+| `public/vendor/three/` | three.js r187 + OrbitControls (MIT, `LICENSE`); CDN yoxdur, CSP buna görə sərtdir |
+| `cad-tools/` | Python CAD skriptləri: 3MF → hissələr → kürək/kaset → veb modelləri |
+| `tools/dom-check.js` | (istəyə bağlı) sayt və simulyasiya səhifəsi üçün jsdom testi, 62 yoxlama. `jsdom` və `@napi-rs/canvas` tələb edir |
+| `tools/sim-check.mjs` | (istəyə bağlı) simulyatorun headless davranış testi: sürmə, toqquşma, line following, maneədən qaçma, arena. `@napi-rs/canvas` tələb edir |
 
 ## Railway-ə deploy
 

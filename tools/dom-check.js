@@ -70,7 +70,7 @@ function robotMode(rid) {
   await waitFor(() => $('#app .hero'));
   ok(!!$('.hero h1'), 'hero render olundu');
   ok(await waitFor(() => $('#stOnline').textContent === '3'), 'onlayn robot sayı (/api/public) = ' + ($('#stOnline') || {}).textContent);
-  ok($$('.links a[data-nav]').length === 4, 'nav linkləri');
+  ok($$('.links a[data-nav]').length === 5, 'nav linkləri (Simulyasiya daxil)');
 
   console.log('Robotlar (giriş)');
   navTo('/robots');
@@ -158,6 +158,61 @@ function robotMode(rid) {
   click($('#logoutBtn'));
   ok(await waitFor(() => $('#loginForm')), 'çıxış → giriş forması');
   ok(!w.localStorage.getItem('smarsPw'), 'yadda saxlanan şifrə silindi');
+
+  console.log('Simulyasiya səhifəsi (girişsiz)');
+  {
+    // sim3d.js Node-da headless işləyir (jsdom WebGL/ES modul dəstəkləmir); səhifənin qalanı realdır
+    const nodeFetch = globalThis.fetch;
+    globalThis.fetch = (u, o) => nodeFetch(new URL(u, base), o);
+    globalThis.localStorage = w.localStorage;
+    const { createCanvas } = require('@napi-rs/canvas');
+    const mod = await import(path.join(root, 'public', 'sim3d.js'));
+    const hook = { load: async () => mod, opts: { headless: true, createCanvas } };
+    w.__smarsSimTest = hook;
+    navTo('/sim');
+    ok(await waitFor(() => hook.instance && !$('#simLoading'), 8000), '3D simulyator yükləndi (CAD modelləri: smars.bin)');
+    const sim = hook.instance;
+    // real tempdə: panel əmri real vaxtla 150 ms-dən bir təkrarlayır, ölü-adam taymeri isə sim vaxtı ilə işləyir
+    const run = async (sec) => { for (let t = 0; t < sec; t += 0.05) { sim.step(0.05); await sleep(50); } };
+    ok(await waitFor(() => $('#cOn').textContent.includes('SİMULYASİYA')), 'panel simulyasiyaya qoşuldu');
+    ok(await waitFor(() => $$('[data-mode]').length === 4), '4 rejim (konfiqurasiya A)');
+    ok(await waitFor(() => $$('[data-group]').length === 6), 'simulyasiya ayarları yükləndi (6 qrup)');
+    ok(await waitFor(() => $$('#irRows .ir-row').length === 3), 'IR sensorlar göstərilir');
+    const p0 = sim.state();
+    const F = $('[data-dir="F"]');
+    F.dispatchEvent(new w.PointerEvent('pointerdown', { bubbles: true, pointerId: 2 }));
+    await run(1.2);
+    ok(await waitFor(() => $('#tdir').textContent === 'İRƏLİ', 2000), 'D-pad F → İRƏLİ');
+    F.dispatchEvent(new w.PointerEvent('pointerup', { bubbles: true, pointerId: 2 }));
+    const p1 = sim.state();
+    ok(Math.hypot(p1.x - p0.x, p1.z - p0.z) > 150, `robot 3D səhnədə irəli getdi (${Math.hypot(p1.x - p0.x, p1.z - p0.z).toFixed(0)} mm)`);
+    await run(1);
+    ok(await waitFor(() => $('#tdir').textContent === 'STOP', 2000), 'buraxanda STOP');
+    click($('[data-mode="2"]'));
+    await run(3);
+    ok(await waitFor(() => /XƏTT/.test($('#autoStat').textContent), 3000), 'line following: ' + $('#autoStat').textContent);
+    ok(await waitFor(() => $$('#irRows .ir-tag.black').length >= 1, 3000), 'IR sensor qara xətti görür');
+    click($('[data-mode="0"]'));
+    ok(await waitFor(() => /\d/.test($('#simStats').textContent)), 'HUD statistikası: ' + $('#simStats').textContent.slice(0, 50));
+    // fərdiləşdirmə simulyasiyada da işləyir
+    click($('[data-tab="custom"]'));
+    const ch = (sel, val) => { const el = $(sel); el.checked = val; el.dispatchEvent(new w.Event('change', { bubbles: true })); };
+    ch('[data-pmode="arena"]', false);
+    click($('#pSave'));
+    click($('[data-tab="control"]'));
+    ok(await waitFor(() => !$$('[data-mode]').some((b) => b.dataset.mode === '3')), 'fərdiləşdirmə: arena düyməsi gizləndi');
+    // konfiqurasiya B (IR-sız) + arena səhnəsi
+    const cfg = $('#simCfg'); cfg.value = 'B'; cfg.dispatchEvent(new w.Event('change', { bubbles: true }));
+    ok(await waitFor(() => $('#cardIr').hidden && !$$('[data-mode]').some((b) => b.dataset.mode === '2')), 'konfiqurasiya B: IR paneli və line following yoxdur');
+    const sc = $('#simScene'); sc.value = 'arena'; sc.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await run(0.5);
+    ok(await waitFor(() => /kub çıxarılıb: 0\/6/.test($('#simStats').textContent), 2000), 'arena səhnəsi: 6 kub');
+    sc.value = 'line'; sc.dispatchEvent(new w.Event('change', { bubbles: true }));
+    cfg.value = 'A'; cfg.dispatchEvent(new w.Event('change', { bubbles: true }));
+    navTo('/');
+    ok(await waitFor(() => $('.hero')), 'simulyasiyadan çıxış (destroy) xətasızdır');
+    globalThis.fetch = nodeFetch;
+  }
 
   ok(errors.length === 0, 'JS xətası yoxdur' + (errors.length ? ': ' + errors.join(' | ') : ''));
   dom.window.close();
