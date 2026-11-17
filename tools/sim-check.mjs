@@ -131,13 +131,70 @@ console.log('Arena (180 san)');
   sim.destroy();
 }
 
+console.log('Şarj stansiyası');
+{
+  const sim = await mk('station');
+  const dockLocal = () => {                       // robotun pozası dok çərçivəsində (dok = 0,0,0°)
+    const s = sim.state(), dp = s.dockPose, c = Math.cos(dp.h), sn = Math.sin(dp.h), dx = s.x - dp.x, dz = s.z - dp.z;
+    const lx = dx * c - dz * sn, ly = -(dx * sn + dz * c), dh = ((((s.h - dp.h) * 180) / Math.PI + 540) % 360) - 180;
+    return { lx, ly, dh, tx: lx + 84 * Math.sin((dh * Math.PI) / 180) };   // tx: quyruğun ucunun yan xətası
+  };
+  const toW = (lx, ly) => { const dp = sim.state().dockPose, c = Math.cos(dp.h), sn = Math.sin(dp.h); return [dp.x + lx * c - ly * sn, dp.z - lx * sn - ly * c]; };
+  ok(sim.handle('/status')[1].bat === 30 && sim.handle('/status')[1].chg === 0, 'səhnə: batareya 30%, şarj yoxdur');
+  ok(sim.handle('/mode', { m: '4' })[0] === 200, '/mode?m=4 qəbul olunur');
+  const seen = new Set();
+  let tDock = -1;
+  for (let t = 0; t < 20 && tDock < 0; t += 0.05) { sim.step(0.05); seen.add(sim.state().dock); if (sim.state().dock === 'docked') tDock = t; }
+  ok(tDock > 0 && tDock < 12, `xətt → T → 180° → geri: ${tDock.toFixed(1)} san-də oturdu`);
+  ok(['follow', 'stop', 'spin', 'reverse'].every((x) => seen.has(x)), 'vəziyyətlər: ' + [...seen].join(' → '));
+  const L = dockLocal();
+  ok(Math.abs(L.lx) < 1.3 && Math.abs(L.ly) < 1.3 && Math.abs(L.dh) < 3, `dok dəqiqliyi: yana ${L.lx.toFixed(2)} mm, ${L.dh.toFixed(2)}°`);
+  const st1 = sim.handle('/status')[1];
+  ok(st1.chg === 1 && st1.dock === 'ŞARJ OLUNUR' && st1.mode === 4, `status: chg=1, dock="${st1.dock}"`);
+  const b0 = sim.state().soc; sim.step(10);
+  ok(sim.state().soc > b0 + 0.05 && sim.state().det, `şarj: 10 san-də ${(b0 * 100).toFixed(0)}% → ${(sim.state().soc * 100).toFixed(0)}%`);
+  sim.setBattery(99); sim.step(8);
+  ok(sim.state().dock === 'charged' && sim.handle('/status')[1].dock === 'DOLDU', 'dolduqda → DOLDU');
+  // huni: əl ilə geri sürmə — tutma zonası ±19 mm
+  const back = (lx, yaw) => {
+    sim.reset(); const [x, z] = toW(lx, 140); sim.place(x, z, sim.state().dockPose.h + (yaw * Math.PI) / 180);
+    hold(sim, 'B', 3);
+    return { ...dockLocal(), det: sim.state().det };
+  };
+  const c1 = back(15, 0), c2 = back(-8, 2), c3 = back(28, 0);
+  ok(c1.det && Math.abs(c1.tx) < 1.3, `huni 15 mm yan xətanı düzəldir → quyruq ${c1.tx.toFixed(2)} mm, ${c1.dh.toFixed(2)}°, DET=${c1.det ? 1 : 0}`);
+  ok(c2.det && Math.abs(c2.tx) < 1.3 && Math.abs(c2.dh) < 3, `huni 2° çəp girişi tutur → quyruq ${c2.tx.toFixed(2)} mm, ${c2.dh.toFixed(2)}°, DET=${c2.det ? 1 : 0}`);
+  ok(!c3.det && c3.ly > 20, `28 mm kənarda: quyruq stansiyanın üzünə dirənir (DET=0, ly=${c3.ly.toFixed(0)})`);
+  // avtomatik qayıdış: xətt rejimində (T-yə çatmamış) batareya 25%-dən aşağı düşür
+  sim.reset(); sim.setBattery(25.4);
+  sim.handle('/mode', { m: '2' });
+  let sw = -1, dk = -1;
+  for (let t = 0; t < 60 && dk < 0; t += 0.1) {
+    sim.step(0.1);
+    if (sw < 0 && sim.state().dock !== 'idle') sw = t;
+    if (sim.state().dock === 'docked') dk = t;
+  }
+  ok(sw > 0 && dk > sw, `avtomatik qayıdış: ${sw.toFixed(1)} san-də rejim 4, ${dk.toFixed(1)} san-də oturdu`);
+  // boş batareya
+  sim.reset(); sim.handle('/mode', { m: '1' }); sim.setBattery(0.5); sim.step(1);
+  const p0 = sim.state(); sim.step(1); const p1 = sim.state();
+  ok(Math.hypot(p1.x - p0.x, p1.z - p0.z) < 0.01 && sim.handle('/status')[1].status === 'BATAREYA BOŞDUR', 'batareya boşdur → robot dayanır');
+  sim.destroy();
+  const sim2 = await mk('line');
+  ok(sim2.handle('/mode', { m: '4' })[0] === 409, 'stansiyasız səhnədə "Şarja qayıt" → 409');
+  const s0 = sim2.state().soc; sim2.handle('/mode', { m: '2' }); sim2.step(20);
+  ok(s0 - sim2.state().soc < 0.01, 'stansiyasız səhnədə batareya real tempdə boşalır');
+  sim2.destroy();
+}
+
 console.log('Konfiqurasiya B (IR-sız) + API');
 {
   const sim = await mk('arena', 'B');
   ok(sim.handle('/mode', { m: '2' })[0] === 409, 'IR-sız konfiqurasiyada line following → 409');
   ok(sim.handle('/status')[1].ir === undefined, 'status-da ir yoxdur');
   const set = sim.handle('/settings')[1];
-  ok(set.g.length === 6 && set.s.some((x) => x.k === 'obsDist'), 'settings: 6 qrup');
+  ok(set.g.length === 7 && set.s.some((x) => x.k === 'obsDist') && set.g.some((g) => g.i === 'bat'), 'settings: 7 qrup (batareya daxil)');
+  ok(sim.handle('/mode', { m: '4' })[0] === 409, 'IR-sız konfiqurasiyada "Şarja qayıt" → 409');
   ok(sim.handle('/set', { k: 'obsDist', v: '500' })[1] === '80', '/set maks. qiymətə məhdudlaşdırır');
   sim.handle('/reset', { g: 'obs' });
   ok(sim.handle('/settings')[1].s.find((x) => x.k === 'obsDist').v === 22, '/reset qrupu default-a qaytarır');

@@ -43,8 +43,9 @@ const MODES = [
   { id: 1, key: 'obstacle', name: 'Maneədən qaçma' },
   { id: 2, key: 'line', name: 'Line following' },
   { id: 3, key: 'arena', name: 'Arena (kub çıxar)' },
+  { id: 4, key: 'dock', name: 'Şarja qayıt' },        // şarj stansiyası (smars-charger/firmware/smars_dock.h)
 ];
-const MODULES = ['ir', 'distance', 'servo', 'settings'];
+const MODULES = ['ir', 'distance', 'servo', 'settings', 'battery'];
 
 const REQ_TIMEOUT_MS = 5000;
 const MAX_PENDING = 256;
@@ -117,8 +118,8 @@ function defaultProfile() {
   return {
     name: '',
     color: '#00e5ff',
-    modes: { obstacle: true, line: true, arena: true },
-    modules: { ir: true, distance: true, servo: true, settings: true },
+    modes: { obstacle: true, line: true, arena: true, dock: true },
+    modules: { ir: true, distance: true, servo: true, settings: true, battery: true },
     hiddenGroups: [],
     updated: 0,
   };
@@ -402,9 +403,11 @@ function parseBody(d) {
   try { return JSON.parse(d); } catch (_) { return null; }
 }
 
+const num = (v) => typeof v === 'number' && Number.isFinite(v);
 function absorbStatus(robot, d) {
   const s = parseBody(d);
   if (!s) return;
+  const prevChg = robot.last ? robot.last.chg : undefined;
   const modeChanged = Number.isInteger(s.mode) && (!robot.last || robot.last.mode !== s.mode);
   robot.last = {
     mode: Number.isInteger(s.mode) ? s.mode : (robot.last ? robot.last.mode : null),
@@ -412,9 +415,15 @@ function absorbStatus(robot, d) {
     dist: typeof s.dist === 'number' ? s.dist : null,
     rssi: typeof s.rssi === 'number' ? s.rssi : null,
     tankDir: typeof s.tankDir === 'string' ? s.tankDir.slice(0, 12) : null,
+    // batareya / şarj (firmware göndərirsə): bat 0–100 %, vbat V, chg 0/1, dock = dok vəziyyəti mətni
+    bat: num(s.bat) ? Math.max(0, Math.min(100, Math.round(s.bat))) : null,
+    vbat: num(s.vbat) ? Math.round(s.vbat * 100) / 100 : null,
+    chg: s.chg === undefined || s.chg === null ? null : (s.chg === true || s.chg === 1),
+    dock: typeof s.dock === 'string' ? s.dock.slice(0, 40) : null,
     at: Date.now(),
   };
-  broadcastList(modeChanged);
+  const chgChanged = prevChg !== undefined && prevChg !== robot.last.chg;
+  broadcastList(modeChanged || chgChanged);
 }
 
 function registerRobot(me, id) {

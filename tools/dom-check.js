@@ -88,15 +88,18 @@ function robotMode(rid) {
   ok($$('.rcard').length === 1, 'axtarış filtri');
   q.value = ''; q.dispatchEvent(new w.Event('input', { bubbles: true }));
   ok(await waitFor(() => $$('.rcard .pill.mode').every((p) => p.textContent !== '…')), 'kartlarda rejim göstərilir');
+  ok(await waitFor(() => $$('.rcard .pill.bat').length === 3), 'kartlarda batareya faizi göstərilir');
 
   console.log('İdarəetmə');
   click($$('.rcard').find((c) => c.getAttribute('href') === '/robot/smars-sim-1'));
   ok(await waitFor(() => w.location.pathname === '/robot/smars-sim-1' && $('#modeGrid')), 'robot səhifəsi açıldı');
   ok(await waitFor(() => $('#cOn').textContent.includes('ONLAYN')), 'onlayn pill');
-  ok(await waitFor(() => $$('[data-mode]').length === 4), '4 rejim düyməsi');
+  ok(await waitFor(() => $$('[data-mode]').length === 5), '5 rejim düyməsi ("Şarja qayıt" daxil — firmware bat göndərir)');
   ok(await waitFor(() => $$('[data-group]').length === 4), 'robot ayarları yükləndi (4 qrup)');
   ok(await waitFor(() => /\d+/.test($('#distBig').textContent)), 'məsafə canlı: ' + $('#distBig').textContent.trim());
   ok(await waitFor(() => $$('#irRows .ir-row').length === 3), 'IR sətirləri');
+  ok(await waitFor(() => !$('#cardBat').hidden && /\d+/.test($('#batBig').textContent) && /V$/.test($('#batV').textContent)),
+    'batareya kartı: ' + $('#batBig').textContent.trim() + ' · ' + $('#batV').textContent);
   const F = $('[data-dir="F"]');
   F.dispatchEvent(new w.PointerEvent('pointerdown', { bubbles: true, pointerId: 1 }));
   ok(await waitFor(() => $('#tdir').textContent === 'İRƏLİ', 2000), 'F basılı → İRƏLİ');
@@ -175,8 +178,8 @@ function robotMode(rid) {
     // real tempdə: panel əmri real vaxtla 150 ms-dən bir təkrarlayır, ölü-adam taymeri isə sim vaxtı ilə işləyir
     const run = async (sec) => { for (let t = 0; t < sec; t += 0.05) { sim.step(0.05); await sleep(50); } };
     ok(await waitFor(() => $('#cOn').textContent.includes('SİMULYASİYA')), 'panel simulyasiyaya qoşuldu');
-    ok(await waitFor(() => $$('[data-mode]').length === 4), '4 rejim (konfiqurasiya A)');
-    ok(await waitFor(() => $$('[data-group]').length === 6), 'simulyasiya ayarları yükləndi (6 qrup)');
+    ok(await waitFor(() => $$('[data-mode]').length === 5), '5 rejim (konfiqurasiya A, "Şarja qayıt" daxil)');
+    ok(await waitFor(() => $$('[data-group]').length === 7), 'simulyasiya ayarları yükləndi (7 qrup, "Batareya / şarj" daxil)');
     ok(await waitFor(() => $$('#irRows .ir-row').length === 3), 'IR sensorlar göstərilir');
     const p0 = sim.state();
     const F = $('[data-dir="F"]');
@@ -201,9 +204,26 @@ function robotMode(rid) {
     click($('#pSave'));
     click($('[data-tab="control"]'));
     ok(await waitFor(() => !$$('[data-mode]').some((b) => b.dataset.mode === '3')), 'fərdiləşdirmə: arena düyməsi gizləndi');
+    // şarj stansiyası səhnəsi: "Şarja qayıt" → robot oturur, şarj gedir, panel və HUD bunu göstərir
+    const sc0 = $('#simScene'); sc0.value = 'station'; sc0.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await run(0.2);
+    ok(sim.state().dockPose && sim.info().bat === 30, 'stansiya səhnəsi qurulub (batareya 30%)');
+    click($('[data-mode="4"]'));
+    await run(0.2);
+    for (let i = 0; i < 60 && sim.state().dock !== 'docked'; i++) sim.step(0.25);
+    ok(sim.state().dock === 'docked' && sim.state().det, `"Şarja qayıt": robot stansiyaya oturdu (DET=1, ${sim.state().dock})`);
+    await run(0.6);
+    ok(await waitFor(() => /GEDİR/.test($('#batChg').textContent), 3000), 'batareya kartı: şarj ⚡ GEDİR');
+    ok(await waitFor(() => /ŞARJ OLUNUR/.test($('#autoStat').textContent), 3000), 'vəziyyət paneli: ' + $('#autoStat').textContent);
+    ok(/⚡/.test($('#simStats').textContent), 'HUD-da şarj işarəsi');
+    const bIn = $('#simBat'); bIn.value = '12'; bIn.dispatchEvent(new w.Event('input', { bubbles: true }));
+    ok(sim.info().bat === 12, '🔋 sürgüsü batareyanı dəyişir');
+    click($('[data-mode="0"]'));
+    await run(0.2);
     // konfiqurasiya B (IR-sız) + arena səhnəsi
     const cfg = $('#simCfg'); cfg.value = 'B'; cfg.dispatchEvent(new w.Event('change', { bubbles: true }));
-    ok(await waitFor(() => $('#cardIr').hidden && !$$('[data-mode]').some((b) => b.dataset.mode === '2')), 'konfiqurasiya B: IR paneli və line following yoxdur');
+    ok(await waitFor(() => $('#cardIr').hidden && !$$('[data-mode]').some((b) => b.dataset.mode === '2' || b.dataset.mode === '4')),
+      'konfiqurasiya B: IR paneli, line following və "Şarja qayıt" yoxdur');
     const sc = $('#simScene'); sc.value = 'arena'; sc.dispatchEvent(new w.Event('change', { bubbles: true }));
     await run(0.5);
     ok(await waitFor(() => /kub çıxarılıb: 0\/6/.test($('#simStats').textContent), 2000), 'arena səhnəsi: 6 kub');

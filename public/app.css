@@ -248,3 +248,22 @@ th{color:var(--muted);font-weight:500;font-size:.8rem;text-transform:uppercase;l
 .toast{background:var(--surf);border:1px solid var(--brd);border-left:3px solid var(--acc);border-radius:10px;padding:10px 14px;box-shadow:var(--shadow);font-size:.9rem;max-width:340px;animation:tin .2s}
 .toast.ok{border-left-color:var(--grn)} .toast.warn{border-left-color:var(--ylw)} .toast.error{border-left-color:var(--red)}
 @keyframes tin{from{opacity:0;transform:translateY(8px)}}
+
+/* batareya / şarj */
+.pill.bat{font-size:.68rem}
+.pill.bat.ok{color:var(--grn);border-color:#1d5a14;background:#0b2108}
+.pill.bat.mid{color:var(--ylw);border-color:#5a4a0a;background:#211b04}
+.pill.bat.low{color:var(--red);border-color:#5a1020;background:#22060c}
+.pill.bat.chg{color:var(--acc);border-color:#0b4656;background:#00222e}
+.bat-big{display:flex;align-items:center;justify-content:center;gap:14px}
+.bat-big .dist-big{margin:4px 0 10px}
+.bat-ico{position:relative;width:54px;height:24px;border:2px solid var(--muted);border-radius:5px;padding:2px;margin-bottom:6px}
+.bat-ico::after{content:'';position:absolute;right:-6px;top:6px;width:4px;height:8px;border-radius:0 2px 2px 0;background:var(--muted)}
+.bat-ico i{display:block;height:100%;width:0;border-radius:2px;background:var(--grn);transition:width .3s}
+.bat-ico.mid i{background:var(--ylw)} .bat-ico.low i{background:var(--red)}
+.bat-ico.chg i{background:var(--acc);box-shadow:0 0 8px var(--acc);animation:chgpulse 1.2s ease-in-out infinite}
+@keyframes chgpulse{50%{opacity:.55}}
+.dist-big.bat.ok{color:var(--grn)} .dist-big.bat.mid{color:var(--ylw)} .dist-big.bat.low{color:var(--red)} .dist-big.bat.chg{color:var(--acc)}
+.sim-bat{display:flex;align-items:center;gap:4px;color:var(--muted);font-family:var(--mono)}
+.sim-bat input{width:90px}
+.sim-bat output{min-width:34px;font-size:.72rem}

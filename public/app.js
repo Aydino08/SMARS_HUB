@@ -36,24 +36,27 @@
     { id: 1, key: 'obstacle', name: 'Maneədən qaçma' },
     { id: 2, key: 'line', name: 'Line following' },
     { id: 3, key: 'arena', name: 'Arena (kub çıxar)' },
+    { id: 4, key: 'dock', name: 'Şarja qayıt' },
   ];
   const MODE_DESC = {
     manual: 'D-pad və klaviatura ilə birbaşa sürmə. Həmişə açıqdır — robotu dayandırmaq üçün lazımdır.',
     obstacle: 'Ultrasəs sensoru ilə qarşıdakı maneələrdən avtomatik yayınma.',
     line: 'IR sensorlarla qara xətt üzrə hərəkət.',
     arena: 'Arenadakı kubları kənara itələmək (sumo/kürək rejimi).',
+    dock: 'Xətt və T üzrə şarj stansiyasına qayıdır, 180° dönüb arxası ilə oturur və şarj olunur (IR sensorlar + şarj quyruğu lazımdır).',
   };
   const MODULES = [
     { key: 'distance', name: 'Ultrasəs məsafə', desc: 'HC-SR04 məsafə göstəricisi' },
     { key: 'ir', name: 'IR sensorlar', desc: 'Xətt sensorlarının canlı dəyərləri' },
     { key: 'servo', name: 'Servo / qısqac', desc: 'Gripper və elbow servoları (söndürüləndə serverdə də bloklanır)' },
     { key: 'settings', name: 'Robot ayarları', desc: 'Robotun öz parametrləri paneli' },
+    { key: 'battery', name: 'Batareya / şarj', desc: 'Faiz, gərginlik və şarj vəziyyəti (robot “bat” göndərirsə)' },
   ];
   const PRESETS = {
-    all: { label: 'Hamısı açıq', modes: { obstacle: true, line: true, arena: true }, modules: { ir: true, distance: true, servo: true, settings: true } },
-    manual: { label: 'Yalnız əl idarəsi', modes: { obstacle: false, line: false, arena: false }, modules: { ir: false, distance: true, servo: false, settings: true } },
-    dozer: { label: 'Kürək + HC-SR04', modes: { obstacle: true, line: false, arena: true }, modules: { ir: false, distance: true, servo: false, settings: true } },
-    line: { label: 'Line follower', modes: { obstacle: false, line: true, arena: false }, modules: { ir: true, distance: false, servo: false, settings: true } },
+    all: { label: 'Hamısı açıq', modes: { obstacle: true, line: true, arena: true, dock: true }, modules: { ir: true, distance: true, servo: true, settings: true, battery: true } },
+    manual: { label: 'Yalnız əl idarəsi', modes: { obstacle: false, line: false, arena: false, dock: false }, modules: { ir: false, distance: true, servo: false, settings: true, battery: true } },
+    dozer: { label: 'Kürək + HC-SR04', modes: { obstacle: true, line: false, arena: true, dock: false }, modules: { ir: false, distance: true, servo: false, settings: true, battery: true } },
+    line: { label: 'Line follower', modes: { obstacle: false, line: true, arena: false, dock: true }, modules: { ir: true, distance: false, servo: false, settings: true, battery: true } },
   };
   const COLORS = ['#00e5ff', '#39ff14', '#ffcc00', '#ff9f00', '#ff2244', '#b44fff', '#4d8dff', '#ff5fd2', '#e8f6fa'];
 
@@ -301,9 +304,9 @@
   <h2>Nə edə bilərsən?</h2>
   <p class="lead">Bütün idarəetmə bir səhifədədir — telefondan da, kompüterdən də.</p>
   <div class="grid g4">
-    <div class="card feat"><div class="ico">📡</div><h4>Canlı robot siyahısı</h4><p>WebSocket ilə qoşulan bütün SMARS-lar real vaxtda görünür: rejim, məsafə, Wi-Fi siqnalı, gecikmə.</p></div>
+    <div class="card feat"><div class="ico">📡</div><h4>Canlı robot siyahısı</h4><p>WebSocket ilə qoşulan bütün SMARS-lar real vaxtda görünür: rejim, batareya, məsafə, Wi-Fi siqnalı, gecikmə.</p></div>
     <div class="card feat"><div class="ico">🎮</div><h4>Uzaqdan idarəetmə</h4><p>D-pad, klaviatura (↑↓←→ / WASD), sürət, servo. Əlaqə qopsa robot özü dayanır.</p></div>
-    <div class="card feat"><div class="ico">🧩</div><h4>Fərdiləşdirmə</h4><p>Hər robot üçün line following, maneədən qaçma, arena və modulları ayrıca aç-söndür.</p></div>
+    <div class="card feat"><div class="ico">🧩</div><h4>Fərdiləşdirmə</h4><p>Hər robot üçün line following, maneədən qaçma, arena, şarja qayıt və modulları ayrıca aç-söndür.</p></div>
     <div class="card feat"><div class="ico">🔒</div><h4>Təhlükəsiz</h4><p>Robotlar gizli açarla, sayt şifrə ilə qorunur. Söndürülmüş rejimlər serverdə də bloklanır.</p></div>
   </div>
 </section>
@@ -387,6 +390,13 @@
     };
   }
 
+  // batareya göstəricisi (robot "bat" göndərirsə və modul söndürülməyibsə)
+  function batClass(p, chg) { return chg ? 'chg' : p < 20 ? 'low' : p < 45 ? 'mid' : 'ok'; }
+  function batPill(last, prof) {
+    if (!last || typeof last.bat !== 'number' || (prof.modules && prof.modules.battery === false)) return '';
+    return `<span class="pill bat ${batClass(last.bat, last.chg)}" title="${last.vbat != null ? esc(last.vbat) + ' V' : ''}">${last.chg ? '⚡' : '🔋'} ${esc(last.bat)}%</span>`;
+  }
+
   function robotCard(r) {
     const prof = r.profile || {};
     const color = prof.color || '#00e5ff';
@@ -406,6 +416,7 @@
   </div>
   ${r.on ? `
   <div class="row"><span class="pill mode">${esc(last.mode != null ? Hub.modeName(last.mode) : '…')}</span>
+    ${batPill(last, prof)}
     ${last.status ? `<span class="muted small">${esc(last.status)}</span>` : ''}</div>
   <div class="rmeta">
     <div><span>Məsafə</span><b>${esc(dist)}</b></div>
@@ -485,8 +496,8 @@
     const emit = (t) => subs.forEach((f) => { try { f(t); } catch (e) { console.error(e); } });
     const defProfile = (c) => ({
       name: '', color: c === 'B' ? '#ffcc00' : '#00e5ff',
-      modes: { obstacle: true, line: c !== 'B', arena: true },
-      modules: { ir: c !== 'B', distance: true, servo: true, settings: true },
+      modes: { obstacle: true, line: c !== 'B', arena: true, dock: c !== 'B' },
+      modules: { ir: c !== 'B', distance: true, servo: true, settings: true, battery: true },
       hiddenGroups: c === 'B' ? ['line'] : [], updated: 0,
     });
     const load = (c) => {
@@ -548,7 +559,7 @@
     const saveUi = () => { try { localStorage.setItem('smarsSimUi', JSON.stringify(ui)); } catch (_) { /* */ } };
     T.setConfig(ui.config);
     ctrl = ControlPage('sim', T);
-    const SC = { line: 'Xətt trası', obstacle: 'Maneələr', arena: 'Arena (kub çıxar)' };
+    const SC = { line: 'Xətt trası', obstacle: 'Maneələr', arena: 'Arena (kub çıxar)', station: 'Şarj stansiyası' };
     const CAMS = { follow: 'İzlə', chase: 'Arxadan', top: 'Yuxarıdan', fpv: 'Sensor gözü' };
     return {
       title: 'Simulyasiya',
@@ -566,6 +577,8 @@
       <select class="input sm" id="simCfg"><option value="A" ${ui.config === 'A' ? 'selected' : ''}>TCRT5000 ×3 + kürək + HC-SR04</option>
         <option value="B" ${ui.config === 'B' ? 'selected' : ''}>Kürək + HC-SR04 (IR-sız)</option></select>
       <button class="btn-ghost sm" id="simReset" title="Səhnəni və robotu yenidən qur">⟲ Sıfırla</button>
+      <label class="small sim-bat" title="Virtual batareyanın faizi (aşağı sal → robot avtomatik stansiyaya qayıdır)">🔋
+        <input type="range" id="simBat" min="0" max="100" step="1" value="85"><output id="simBatO">85%</output></label>
     </div>
     <div class="hud-box seg" id="simCams">
       ${Object.entries(CAMS).map(([k, v]) => `<button class="btn-ghost sm ${k === ui.cam ? 'active' : ''}" data-cam="${k}">${esc(v)}</button>`).join('')}
@@ -575,7 +588,9 @@
   <div class="sim-stats" id="simStats"></div>
 </div>
 <p class="muted small" style="margin:8px 2px 0">Kamera: siçanla fırlat / sağ düymə ilə sürüşdür / təkərlə yaxınlaşdır. Sürmək: ↑ ↓ ← → və ya WASD.
-  Servo qolu və Arduino lövhəsi sxematikdir (CAD-də yoxdur).</p>
+  Servo qolu və Arduino lövhəsi sxematikdir (CAD-də yoxdur).
+  <b>Şarj stansiyası</b> səhnəsində “Şarja qayıt” rejimini seç və ya 🔋 sürgüsünü 25%-dən aşağı sal — robot xətt + T üzrə
+  stansiyaya qayıdır, 180° dönüb şarj quyruğu ilə oturur, yaşıl LED yanır və batareya dolur.</p>
 <div style="margin-top:22px">${ctrl.html}</div>`,
       mount(app) {
         ctrl.mount(app);
@@ -605,6 +620,11 @@
           T.setConfig(ui.config);
         });
         $('#simReset', app).addEventListener('click', () => { if (sim) sim.reset(); });
+        const batIn = $('#simBat', app);
+        batIn.addEventListener('input', () => {
+          $('#simBatO', app).textContent = batIn.value + '%';
+          if (sim) sim.setBattery(Number(batIn.value));
+        });
         $('#simCams', app).addEventListener('click', (e) => {
           const b = e.target.closest('[data-cam]');
           if (!b) return;
@@ -618,8 +638,11 @@
           const i = sim.info();
           $('#simStats', app).innerHTML =
             `<span>${i.fps} fps</span><span>x ${i.x} · z ${i.z} mm</span><span>${i.h}°</span><span>${i.v} mm/s</span>` +
+            `<span class="${i.bat < 20 && !i.chg ? 'warn' : ''}">${i.chg ? '⚡' : '🔋'} <b>${i.bat}%</b> · ${i.vbat.toFixed(2)} V</span>` +
+            (i.mode === 4 && i.dock ? `<span>dok: <b>${esc(i.dock)}</b></span>` : '') +
             (i.stalled ? '<span class="warn">⛔ ilişib</span>' : '') +
             (i.cubes ? `<span>kub çıxarılıb: <b>${i.out}/${i.cubes}</b></span>` : '');
+          if (document.activeElement !== batIn) { batIn.value = i.bat; $('#simBatO', app).textContent = i.bat + '%'; }
         }, 250);
       },
       unmount() {
@@ -686,21 +709,27 @@
       drawInfo();
     }
 
-    function applyProfile() {
-      const prof = profile();
-      // mod düymələri
-      const allowed = Hub.modes.filter((m) => modeAllowed(m.id));
+    // "Şarja qayıt" yalnız firmware batareya/dok məlumatı göndərirsə göstərilir (köhnə firmware-də yoxdur)
+    const dockCapable = () => { const d = st.lastStatus; return !!d && (typeof d.bat === 'number' || typeof d.dock === 'string'); };
+    function drawModeGrid() {
+      st.dockCap = dockCapable();
+      const allowed = Hub.modes.filter((m) => modeAllowed(m.id) && (m.key !== 'dock' || st.dockCap || st.mode === m.id));
       $('#modeGrid', app).innerHTML = allowed.map((m) =>
         `<button class="mbtn ${m.id === st.mode ? 'active' : ''}" data-mode="${m.id}">${esc(m.name)}</button>`).join('');
+    }
+    function applyProfile() {
+      const prof = profile();
+      drawModeGrid();                      // mod düymələri
       if (!modeAllowed(st.mode)) applyModeUI(0);
       // modullar
       $('#cardDist', app).hidden = !modOn('distance');
       $('#cardIr', app).hidden = !modOn('ir');
       $('#cardServo', app).hidden = !modOn('servo');
       $('#settingsWrap', app).hidden = !modOn('settings');
+      drawBattery();
       const hidden = new Set(prof.hiddenGroups || []);
       $$('[data-group]', app).forEach((d) => { d.hidden = hidden.has(d.dataset.group); });
-      $('#sideCol', app).hidden = !modOn('distance') && !modOn('ir') && !modOn('servo');
+      $('#sideCol', app).hidden = !modOn('distance') && !modOn('ir') && !modOn('servo') && $('#cardBat', app).hidden;
       if (!st.dirty) loadDraft();
     }
 
@@ -823,6 +852,27 @@
         .catch(() => { st.settingsBusy = false; if (st.online) setTimeout(loadSettings, 2000); });
     }
 
+    // ---------- batareya kartı (yalnız robot "bat" göndərirsə görünür)
+    function drawBattery() {
+      const d = st.lastStatus || {};
+      if (st.dockCap !== dockCapable()) drawModeGrid();
+      const card = $('#cardBat', app);
+      const has = typeof d.bat === 'number' && modOn('battery');
+      const wasHidden = card.hidden;
+      card.hidden = !has;
+      if (wasHidden !== card.hidden) $('#sideCol', app).hidden = !modOn('distance') && !modOn('ir') && !modOn('servo') && card.hidden;
+      if (!has) return;
+      const p = clamp(Math.round(d.bat), 0, 100), chg = d.chg === 1 || d.chg === true;
+      const cls = batClass(p, chg);
+      $('#batBig', app).innerHTML = `${esc(p)} <small>%</small>`;
+      $('#batBig', app).className = 'dist-big bat ' + cls;
+      $('#batIco', app).className = 'bat-ico ' + cls;
+      $('#batFill', app).style.width = Math.max(4, p) + '%';
+      $('#batV', app).textContent = typeof d.vbat === 'number' ? d.vbat.toFixed(2) + ' V' : '—';
+      $('#batChg', app).textContent = chg ? '⚡ GEDİR' : 'YOX';
+      $('#batDock', app).textContent = d.dock ? 'Dok: ' + d.dock : (p < 20 && !chg ? 'Batareya azdır — “Şarja qayıt” rejimini seç.' : '');
+    }
+
     // ---------- status poll
     function poll() {
       if (!st.online || st.pollBusy || document.hidden) return;
@@ -856,6 +906,7 @@
         if (d.gripAngle !== undefined && document.activeElement !== $('#grip', app)) { setRange($('#grip', app), d.gripAngle); showServo('grip', d.gripAngle); }
         if (d.elbowAngle !== undefined && document.activeElement !== $('#elbow', app)) { setRange($('#elbow', app), d.elbowAngle); showServo('elbow', d.elbowAngle); }
         st.lastStatus = d;
+        drawBattery();
       }).catch(() => {}).then(() => { st.pollBusy = false; });
     }
 
@@ -918,6 +969,7 @@
         <dt>Gecikmə</dt><dd>${r && r.rtt != null ? esc(r.rtt) + ' ms' : '—'}</dd>
         <dt>Wi-Fi</dt><dd>${esc(s.sta || '—')} · ${esc(s.rssi != null ? s.rssi : (last.rssi != null ? last.rssi : '—'))} dBm</dd>
         <dt>Rejim</dt><dd>${esc(last.mode != null ? Hub.modeName(last.mode) : '—')}</dd>
+        <dt>Batareya</dt><dd>${typeof s.bat === 'number' ? esc(s.bat) + '%' + (typeof s.vbat === 'number' ? ' · ' + esc(s.vbat.toFixed(2)) + ' V' : '') + (s.chg ? ' · ⚡ şarj olunur' : '') : '—'}</dd>
         <dt>Baxanlar</dt><dd>${r ? esc(r.viewers) : 0}</dd>`;
     }
 
@@ -965,6 +1017,12 @@
       </div>
     </div>
     <div class="col" id="sideCol">
+      <div class="card" id="cardBat" hidden>
+        <h3>Batareya / şarj</h3>
+        <div class="bat-big"><div class="bat-ico" id="batIco"><i id="batFill"></i></div><div class="dist-big" id="batBig">— <small>%</small></div></div>
+        <div class="sbar"><div>GƏRGİNLİK: <b id="batV">—</b></div><div>ŞARJ: <b id="batChg">—</b></div></div>
+        <div class="hint" id="batDock"></div>
+      </div>
       <div class="card" id="cardDist">
         <h3>Ultrasəs məsafə (HC-SR04)</h3>
         <div class="dist-big" id="distBig">— <small>sm</small></div>
@@ -1236,10 +1294,10 @@ webSocket.beginSSL(CLOUD_HOST, 443, "/ws/robot?id=smars-01&amp;name=Kurek");</pr
      <code>/status</code> soruşur ki, siyahıda rejim, məsafə və Wi-Fi görünsün.</p>
   <table>
     <tr><th>Yol</th><th>Nümunə</th></tr>
-    <tr><td><code>/mode</code></td><td><code>m=0</code> əl · <code>1</code> maneədən qaçma · <code>2</code> line following · <code>3</code> arena</td></tr>
+    <tr><td><code>/mode</code></td><td><code>m=0</code> əl · <code>1</code> maneədən qaçma · <code>2</code> line following · <code>3</code> arena · <code>4</code> şarja qayıt (şarj stansiyası dəsti)</td></tr>
     <tr><td><code>/tank</code></td><td><code>dir=F|B|L|R|S</code>, <code>spd=60..255</code></td></tr>
     <tr><td><code>/servo</code></td><td><code>grip=0..180</code>, <code>elbow=0..180</code></td></tr>
-    <tr><td><code>/status</code></td><td>JSON: <code>mode, status, dist, rssi, sta, tankDir, tankSpd, ir[], blk[], gripAngle, elbowAngle, sv</code></td></tr>
+    <tr><td><code>/status</code></td><td>JSON: <code>mode, status, dist, rssi, sta, tankDir, tankSpd, ir[], blk[], gripAngle, elbowAngle, sv</code>; istəyə bağlı batareya: <code>bat</code> (%), <code>vbat</code> (V), <code>chg</code> (0/1), <code>dock</code> (vəziyyət mətni)</td></tr>
     <tr><td><code>/settings</code></td><td>JSON: <code>{"g":[{"i","t"}],"s":[{"k","l","t","d","mn","mx","st","v","g"}]}</code></td></tr>
   </table>
 
@@ -1280,7 +1338,7 @@ ROBOT_KEY=test-robot-key-123 npm run sim -- --count 3</pre>
   <h2>Bu platforma nə edir?</h2>
   <div class="grid g2" style="margin:14px 0">
     <div class="card"><h4>Çox robot, bir sayt</h4><p class="muted small">Hər robot öz ID-si ilə qoşulur. Siyahıda hamısı canlı görünür; istənilən birini seçib idarə edirsən.</p></div>
-    <div class="card"><h4>Robot üzrə fərdiləşdirmə</h4><p class="muted small">Line following, maneədən qaçma, arena rejimlərini və IR / ultrasəs / servo panellərini hər robot üçün ayrıca aç-söndür.</p></div>
+    <div class="card"><h4>Robot üzrə fərdiləşdirmə</h4><p class="muted small">Line following, maneədən qaçma, arena, şarja qayıt rejimlərini və IR / ultrasəs / servo / batareya panellərini hər robot üçün ayrıca aç-söndür.</p></div>
     <div class="card"><h4>Real vaxt</h4><p class="muted small">WebSocket üzərindən aşağı gecikmə ilə əmrlər; status 0.6 saniyədən bir yenilənir.</p></div>
     <div class="card"><h4>Təhlükəsizlik</h4><p class="muted small">Açar/şifrə yoxlaması, səhv cəhd limiti, icazəli yollar siyahısı, sorğu sürəti limiti, ölü-adam dayanması.</p></div>
   </div>

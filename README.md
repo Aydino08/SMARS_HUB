@@ -15,7 +15,7 @@ https://smarshub-production.up.railway.app sayta bu linkdən baxa bilərsiniz.
 | Səhifə | Nə edir |
 |---|---|
 | **Ana səhifə** `/` | Layihə haqqında, onlayn robot sayı, necə işləyir |
-| **Robotlar** `/robots` | WebSocket ilə qoşulan bütün SMARS-ların canlı siyahısı. Hər kartda rejim, məsafə, Wi-Fi, gecikmə və neçə nəfərin baxdığı görünür. Axtarış və "yalnız onlayn" filtri var |
+| **Robotlar** `/robots` | WebSocket ilə qoşulan bütün SMARS-ların canlı siyahısı. Hər kartda rejim, batareya (🔋 %, şarj olanda ⚡), məsafə, Wi-Fi, gecikmə və neçə nəfərin baxdığı görünür. Axtarış və "yalnız onlayn" filtri var |
 | **İdarəetmə** `/robot/<id>` | Seçilmiş robotu idarə etmək üçün səhifə (aşağıda ətraflı) |
 | **Simulyasiya** `/sim` | Brauzerdə 3D SMARS: real robotun bütün funksiyaları, giriş tələb etmir (aşağıda ətraflı) |
 | **Qoşulma** `/guide` | Railway deploy, firmware qoşulması, protokol, problemlər |
@@ -27,11 +27,13 @@ https://smarshub-production.up.railway.app sayta bu linkdən baxa bilərsiniz.
   * sürüş rejimləri;
   * D-pad, klaviatura (↑↓←→ / WASD, boşluq = STOP, Esc = əl idarəsi) və sürət;
   * HC-SR04 məsafəsi, IR sensorlar, servo;
+  * **batareya / şarj kartı:** faiz, gərginlik, şarj gedir/yox və dok vəziyyəti. Kart yalnız firmware
+    `/status`-da `bat` göndərəndə görünür;
   * robotun öz ayarları.
 * **Fərdiləşdirmə tabı:** hər robot üçün ayrıca:
   * görünən ad və rəng;
-  * **rejimləri aç-söndür:** maneədən qaçma, line following, arena;
-  * **panelləri aç-söndür:** IR, ultrasəs, servo, ayarlar;
+  * **rejimləri aç-söndür:** maneədən qaçma, line following, arena, **şarja qayıt**;
+  * **panelləri aç-söndür:** IR, ultrasəs, servo, ayarlar, batareya;
   * robot ayar qruplarını gizlətmək;
   * hazır şablonlar: "Yalnız əl idarəsi", "Kürək + HC-SR04", "Line follower".
 
@@ -57,9 +59,30 @@ D-pad, klaviatura, sürət, rejimlər, HC-SR04, IR, servo, ayarlar və fərdilə
 | HC-SR04 | ±15° konus, 2–400 sm, ~16 Hz. Obyektin hündürlüyü nəzərə alınır. 2 sm-dən yaxın kor zona var (999) |
 | TCRT5000 ×3 | Hər sensor yerin rəngini öz CAD mövqeyindən (±16.1 mm, 68 mm irəlidə) oxuyur, faiz və qara/ağ olaraq |
 | Toqquşma | Gövdə, tırtıllar və U-kürəyin qanadları divar və maneələrə dəyir. Kublar kürəklə itələnir |
-| Rejimlər | Əl idarəsi; maneədən qaçma (geri çəkil + dön, bamper kimi ilişmə); line following (3 sensor); arena (kubu tap → tuşla → itələ, kənarı IR ilə gör) |
+| Toqquşmada sürüşmə | Divara yanakı dəyən robot onun boyu sürüşür, küncü dəyəndə "düzlənir". Düz divara dirənəndə isə dayanır |
+| Rejimlər | Əl idarəsi; maneədən qaçma (geri çəkil + dön, bamper kimi ilişmə); line following (3 sensor); arena (kubu tap → tuşla → itələ, kənarı IR ilə gör); **şarja qayıt** (aşağıda) |
+| Batareya | 2S 800 mAh: yük cərəyanı (0.12 A + mühərriklər), şarj (IP2326: 1 A, ~90%-dən sonra CV), faiz ↔ gərginlik əyrisi firmware ilə eynidir. 1% qalanda robot dayanır |
 
-Səhnələr: **Xətt trası**, **Maneələr**, **Arena (kub çıxar)**.
+Səhnələr: **Xətt trası**, **Maneələr**, **Arena (kub çıxar)**, **Şarj stansiyası**.
+
+### Şarj stansiyası səhnəsi və "Şarja qayıt" rejimi (4)
+
+Stansiya və robotun arxasındakı **şarj quyruğu** `smars-charger` CAD-indəndir: gövdə, qapaq,
+plunjerlər, mikroaçar, LED-lər və mis lent. Səhnə stansiyanın real ölçüləri ilə qurulub: qara xətt,
+T zolağı, huni, boğaz və dayaq divarı.
+
+* Rejim 4 **firmware-in özünün** (`smars-charger/firmware/smars_dock.h`) JS köçürməsidir, eyni
+  vəziyyətlər və vaxtlarla: xətt axtarır → izləyir → T-də dayanır → 180° fırlanır → tuşlanır → geri
+  gedir → huni quyruğu mərkəzləyir → plunjerlər lentə toxunur və mikroaçar basılır (DET=1) →
+  **ŞARJ OLUNUR** → **DOLDU**. Dönə bilməsə geri çəkilib yenidən cəhd edir (3 dəfəyə qədər).
+* Stansiyada yaşıl LED yanır, panel və HUD-da ⚡ görünür.
+* **Avtomatik qayıdış:** rejim 1–3-də batareya `Avtomatik qayıdış həddi`-ndən (default 25%) aşağı
+  düşəndə robot özü rejim 4-ə keçir.
+* HUD-dakı 🔋 sürgüsü ilə batareyanı istənilən faizə qoymaq olar, məsələn 20%: qayıdışı dərhal
+  görmək üçün.
+* **Zamanı sürətləndirmə:** stansiya səhnəsində yalnız batareya sürətlənir, robotun hərəkəti yox:
+  boşalma ×10, şarj ×40 ("Batareya / şarj" ayarları). Digər səhnələrdə batareya real tempdə boşalır.
+* Rejim 4 IR sensorsuz konfiqurasiyada (B) və stansiyası olmayan səhnələrdə 409 qaytarır.
 
 Konfiqurasiyalar:
 * **A:** TCRT5000 ×3 + kürək + HC-SR04.
@@ -73,7 +96,7 @@ Modelləri CAD-dən yenidən yaratmaq üçün (`cad-tools/`):
 ```bash
 pip install -r cad-tools/requirements.txt
 python cad-tools/extract_3mf.py /yol/SMARS.3mf
-# (make_combo3.py, make_kurek4.py — kürək hissələri), sonra:
+# (make_combo3.py, make_kurek4.py — kürək hissələri; make_charger.py — şarj stansiyası), sonra:
 python cad-tools/export_web_models.py public/models
 ```
 
@@ -90,8 +113,8 @@ python cad-tools/export_web_models.py public/models
 | `public/models/` | SMARS CAD modelləri (sadələşdirilmiş) + yerləşmə məlumatı |
 | `public/vendor/three/` | three.js r187 + OrbitControls (MIT, `LICENSE`); CDN yoxdur, CSP buna görə sərtdir |
 | `cad-tools/` | Python CAD skriptləri: 3MF → hissələr → kürək/kaset → veb modelləri |
-| `tools/dom-check.js` | (istəyə bağlı) sayt və simulyasiya səhifəsi üçün jsdom testi, 62 yoxlama. `jsdom` və `@napi-rs/canvas` tələb edir |
-| `tools/sim-check.mjs` | (istəyə bağlı) simulyatorun headless davranış testi: sürmə, toqquşma, line following, maneədən qaçma, arena. `@napi-rs/canvas` tələb edir |
+| `tools/dom-check.js` | (istəyə bağlı) sayt və simulyasiya səhifəsi üçün jsdom testi, 69 yoxlama. `jsdom` və `@napi-rs/canvas` tələb edir |
+| `tools/sim-check.mjs` | (istəyə bağlı) simulyatorun headless davranış testi, 45 yoxlama: sürmə, toqquşma, line following, maneədən qaçma, arena, şarj stansiyası (dok, huni, şarj, avtomatik qayıdış). `@napi-rs/canvas` tələb edir |
 
 ## Railway-ə deploy
 
@@ -139,7 +162,25 @@ və ya `hello` mesajında:
 * Saytın göndərə biləcəyi yollar: `/tank /mode /servo /status /settings /set /reset`. Wi-Fi, açar,
   reboot və zavod sıfırlaması saytdan bağlıdır.
 
-Rejim nömrələri: `0` əl idarəsi · `1` maneədən qaçma · `2` line following · `3` arena.
+Rejim nömrələri: `0` əl idarəsi · `1` maneədən qaçma · `2` line following · `3` arena · `4` şarja qayıt.
+
+**Batareya və şarj (istəyə bağlı).** Robotda şarj stansiyası dəsti varsa (`smars-charger`), `/status`
+JSON-a bu sahələri əlavə et. Sayt onları avtomatik göstərir: kartda 🔋, idarəetmədə batareya kartı,
+"Şarja qayıt" düyməsi.
+
+```json
+{"mode":4, "status":"ŞARJ OLUNUR", "vbat":7.62, "bat":58, "chg":1, "dock":"ŞARJ OLUNUR", ...}
+```
+
+| Sahə | Mənası |
+|---|---|
+| `bat` | batareya, % (0–100) — `smars::Dock::batteryPercent(vbat)` |
+| `vbat` | 2S paket gərginliyi, V |
+| `chg` | `1` = kontaktlarda 5V var (robot stansiyada oturub, şarj gedir) |
+| `dock` | dok vəziyyəti mətni — `dock.stateName()` |
+
+`/mode?m=4` gələndə `dock.startDocking()` çağır. Firmware `bat`/`dock` göndərmirsə (köhnə
+firmware), "Şarja qayıt" düyməsi göstərilmir.
 
 ## Lokal sınaq
 

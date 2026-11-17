@@ -83,6 +83,25 @@ parts["B_hc_pcb"] = (pcbB, "#1d5fbf")
 parts["B_hc_trans"] = (trB, "#c9ced3")
 
 
+# --- şarj sistemi (smars-charger/_asm — dok olunmuş robotun chassis çərçivəsində) ---
+CH = ROOT.parent / "smars-charger" / "_asm"
+HAS_CHARGER = CH.exists()
+if HAS_CHARGER:
+    def ld(n):
+        return trimesh.load(CH / f"{n}.stl", force="mesh")
+    parts["R_shoe"] = (ld("şarj_quyruğu"), "#ff7a1a")
+    parts["R_lid"] = (ld("quyruq_qapağı"), "#ffb066")
+    parts["R_tape"] = (ld("mis_lent_kontaktlar"), "#d9822b")
+    parts["R_screws"] = (ld("qapaq_vintləri"), "#b8bec4")
+    parts["S_body"] = (ld("stansiya_gövdəsi"), "#2b3440")
+    parts["S_cover"] = (ld("stansiya_alt_qapağı"), "#3a4652")
+    parts["S_plunger"] = (trimesh.util.concatenate([ld("plunjer_vint_qayka"), ld("yay"), ld("kabel_ucluğu")]), "#c9ced3")
+    parts["S_switch"] = (trimesh.util.concatenate([ld("mikrovaç"), ld("mikrovaç_ayaqları"), ld("mikrovaç_ləçəyi")]), "#1c1c1c")
+    parts["S_led_red"] = (ld("LED_0"), "#ff2a2a")
+    parts["S_led_green"] = (ld("LED_1"), "#29e05a")
+    parts["S_usb"] = (ld("USB_kabel"), "#111111")
+
+
 def front_profile(meshes):
     v = np.vstack([m.vertices for m in meshes])
     centre = v[np.abs(v[:, 0]) < 6]
@@ -126,6 +145,30 @@ layout = {
     },
     "parts": table,
 }
+if HAS_CHARGER:
+    prm = json.loads((CH.parent / "_params.json").read_text())
+    st, sh = prm["station"], prm["shoe"]
+    th, mo = prm["throat_half"], prm["mouth_half"]
+    y0, y1, hw = st["y0"], st["y1"], st["hw"]
+    # dok çərçivəsi = dok olunmuş robotun chassis çərçivəsi (stansiya −Y tərəfdə). F → chassis: (x, y) → (−x, −y)
+    left = [(hw, -y0), (mo, -y0), (th, -st["funnel_y"]), (th, -y1), (hw, -y1)]
+    layout["dock"] = {
+        "robot_parts": ["R_shoe", "R_lid", "R_tape", "R_screws"],
+        "station_parts": ["S_body", "S_cover", "S_plunger", "S_switch", "S_led_red", "S_led_green", "S_usb"],
+        "station_polys": [left, [(-x, y) for x, y in left],
+                          [(-th, -st["back_y"]), (th, -st["back_y"]), (th, -y1), (-th, -y1)]],
+        "station_h": prm["roof_under"] + st["roof_t"] - prm["zf"],
+        "tail": [-sh["tw2"], sh["tw2"], -sh["ty1"], -sh["arm_y0"]],
+        "tail_end": -sh["ty1"],
+        "contact_tail_end": -(st["py"] + (sh["ty1"] - sh["tape_y1"])),     # plunjer lentə çatır
+        "switch_tail_end": -(st["back_y"] - 1.3),                           # mikrovaç işə düşür
+        "back_stop": -st["back_y"],
+        "throat_half": th,
+        "line_start": -prm["line_start_y"],
+        "t_y": sorted([-prm["t_y"][0], -prm["t_y"][1]]),
+        "t_half": prm["t_half"],
+        "spin_y": -prm["spin_y"],
+    }
 (WEB / "smars.bin").write_bytes(bytes(blob))
 (WEB / "smars.json").write_text(json.dumps(layout, indent=1, ensure_ascii=False))
 print("bytes", len(blob), "->", WEB)

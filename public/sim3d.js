@@ -30,12 +30,32 @@ export const SETTINGS_DEF = [
   { k: 'elbHi', l: 'Elbow max', t: 'i', d: 170, mn: 0, mx: 180, st: 1, g: 'servo' },
   { k: 'maxSpd', l: 'Motor maks. sürəti (mm/s)', t: 'i', d: 300, mn: 100, mx: 700, st: 10, g: 'sim' },
   { k: 'noise', l: 'Sensor küyü', t: 'b', d: 1, mn: 0, mx: 1, st: 1, g: 'sim' },
+  { k: 'autoHome', l: 'Batareya azalanda özü stansiyaya qayıtsın', t: 'b', d: 1, mn: 0, mx: 1, st: 1, g: 'bat' },
+  { k: 'lowPct', l: 'Avtomatik qayıdış həddi (%)', t: 'i', d: 25, mn: 5, mx: 60, st: 1, g: 'bat' },
+  { k: 'dockRev', l: 'Stansiyaya girmə sürəti', t: 'i', d: 110, mn: 60, mx: 200, st: 1, g: 'bat' },
+  { k: 'drainX', l: 'Boşalmanı sürətləndir × (stansiya səhnəsində)', t: 'i', d: 10, mn: 1, mx: 200, st: 1, g: 'bat' },
+  { k: 'chgX', l: 'Şarjı sürətləndir × (stansiya səhnəsində)', t: 'i', d: 40, mn: 1, mx: 200, st: 1, g: 'bat' },
 ];
 const GROUPS = [
   { i: 'drive', t: 'Sürüş' }, { i: 'obs', t: 'Maneədən qaçma' }, { i: 'line', t: 'Line following' },
-  { i: 'arena', t: 'Arena' }, { i: 'servo', t: 'Servo limitləri' }, { i: 'sim', t: 'Simulyasiya' },
+  { i: 'arena', t: 'Arena' }, { i: 'servo', t: 'Servo limitləri' }, { i: 'bat', t: 'Batareya / şarj' }, { i: 'sim', t: 'Simulyasiya' },
 ];
-export const SCENES = { line: 'Xətt trası', obstacle: 'Maneələr', arena: 'Arena (kub çıxar)' };
+export const SCENES = { line: 'Xətt trası', obstacle: 'Maneələr', arena: 'Arena (kub çıxar)', station: 'Şarj stansiyası' };
+
+// 2S Li-ion: gərginlik ↔ faiz (firmware/smars_dock.h ilə eyni əyri)
+const BAT_CURVE = [[6.4, 0], [6.8, 8], [7.2, 25], [7.4, 45], [7.6, 60], [7.8, 72], [8.0, 84], [8.2, 93], [8.4, 100]];
+function voltsFromPct(p) {
+  for (let i = 1; i < BAT_CURVE.length; i++) {
+    const [v0, p0] = BAT_CURVE[i - 1], [v1, p1] = BAT_CURVE[i];
+    if (p <= p1) return v0 + ((p - p0) / (p1 - p0)) * (v1 - v0);
+  }
+  return 8.4;
+}
+const DOCK_NAMES = {
+  idle: 'IDLE', seek: 'XƏTT AXTARIR', follow: 'XƏTT İZLƏYİR', turn: 'XƏTTİN SONU — DÖNÜR', stop: 'T — DAYANIR',
+  spin: '180° FIRLANIR', center: 'TUŞLANIR', reverse: 'STANSİYAYA GİRİR', retry: 'YENİDƏN DÜZLƏNİR', backoff: 'GERİ ÇƏKİLİR',
+  docked: 'ŞARJ OLUNUR', charged: 'DOLDU', undock: 'STANSİYADAN ÇIXIR', failed: 'DOK ALINMADI',
+};
 
 // ---------------------------------------------------------------- assets
 let assetP = null;
@@ -110,6 +130,19 @@ function rayBox(ox, oz, dx, dz, o) {
     if (tmin > tmax) return Infinity;
   }
   return tmin;
+}
+function rayPoly(ox, oz, dx, dz, P) {
+  let best = Infinity;
+  for (let i = 0; i < P.length; i++) {
+    const [x1, z1] = P[i], [x2, z2] = P[(i + 1) % P.length];
+    const ex = x2 - x1, ez = z2 - z1;
+    const den = dx * ez - dz * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const t = ((x1 - ox) * ez - (z1 - oz) * ex) / den;
+    const u = ((x1 - ox) * dz - (z1 - oz) * dx) / den;
+    if (t >= 0 && u >= 0 && u <= 1) best = Math.min(best, t);
+  }
+  return best;
 }
 function rayCircle(ox, oz, dx, dz, cx, cz, r) {
   const fx = ox - cx, fz = oz - cz;
@@ -243,6 +276,26 @@ export async function createSim(container, opts = {}) {
     frame.add(g);
     cfgGroups[k] = g;
   }
+  // arxa şarj quyruğu (bütün konfiqurasiyalarda arxa extension yuvasında)
+  const DK = L.dock || null;
+  if (DK) DK.robot_parts.forEach((p) => geo[p] && frame.add(partMesh(p)));
+  // şarj stansiyası (yalnız "station" səhnəsində görünür) — dok çərçivəsində qurulur
+  const stationGroup = new THREE.Group(); stationGroup.visible = false; scene.add(stationGroup);
+  const stationFrame = new THREE.Group(); stationFrame.rotation.x = -Math.PI / 2; stationFrame.position.y = GZ;
+  stationGroup.add(stationFrame);
+  const ledMats = {};
+  if (DK) {
+    DK.station_parts.forEach((p) => {
+      if (!geo[p]) return;
+      let m;
+      if (p === 'S_led_red' || p === 'S_led_green') {
+        const col = L.parts[p].color;
+        ledMats[p] = mat(col, { emissive: new THREE.Color(col), emissiveIntensity: p === 'S_led_red' ? 0.9 : 0.0 });
+        m = new THREE.Mesh(geo[p], ledMats[p]);
+      } else m = partMesh(p);
+      stationFrame.add(m);
+    });
+  }
   // sensor köməkçiləri (dünya səhnəsində)
   const helpers = new THREE.Group(); scene.add(helpers);
   const coneMat = new THREE.MeshBasicMaterial({ color: '#00e5ff', transparent: true, opacity: 0.08, depthWrite: false, side: THREE.DoubleSide });
@@ -262,9 +315,10 @@ export async function createSim(container, opts = {}) {
   let arenaR = 0, arenaBorder = 0;
   const cubeGeo = new THREE.BoxGeometry(50, 50, 50);
 
+  const bbOf = (P) => [Math.min(...P.map((p) => p[0])), Math.min(...P.map((p) => p[1])), Math.max(...P.map((p) => p[0])), Math.max(...P.map((p) => p[1]))];
   function addBox(x, z, w, d, h, color) {
     const o = { kind: 'box', x, z, w, d, h };
-    o.poly = boxPoly(o);
+    o.poly = boxPoly(o); o.bb = bbOf(o.poly);
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
     m.position.set(x, h / 2, z); m.castShadow = m.receiveShadow = true;
     world.add(m); statics.push(o);
@@ -272,8 +326,17 @@ export async function createSim(container, opts = {}) {
   function addCyl(x, z, r, h, color) {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 32), mat(color));
     m.position.set(x, h / 2, z); m.castShadow = m.receiveShadow = true;
-    world.add(m); statics.push({ kind: 'cyl', x, z, r, h });
+    world.add(m); statics.push({ kind: 'cyl', x, z, r, h, bb: [x - r, z - r, x + r, z + r] });
   }
+  function addPoly(poly, h, guide) {           // qabarıq poliqon maneə (stansiya hissələri) — görüntüsü ayrıca
+    statics.push({ kind: 'poly', poly, h, guide: !!guide, bb: bbOf(poly) });
+  }
+  // dok pozası: robot burada olanda stansiyaya tam oturub (dok çərçivəsi → dünya)
+  let dockPose = null;
+  const dockToWorld = (lx, ly) => {
+    const c = Math.cos(dockPose.h), s = Math.sin(dockPose.h);
+    return [dockPose.x + lx * c - ly * s, dockPose.z - lx * s - ly * c];
+  };
   function addCube(x, z) {
     const m = new THREE.Mesh(cubeGeo, mat('#ff5a1f'));
     m.castShadow = m.receiveShadow = true; world.add(m);
@@ -286,7 +349,8 @@ export async function createSim(container, opts = {}) {
   let sceneName = 'line';
   function buildScene(name) {
     sceneName = name;
-    world.clear(); statics = []; cubes = []; arenaR = 0; linePath = null;
+    world.clear(); statics = []; cubes = []; arenaR = 0; linePath = null; dockPose = null;
+    stationGroup.visible = false;
     const g = fctx;
     const S = FLOOR_PX / WORLD;
     g.setTransform(1, 0, 0, 1, 0, 0);
@@ -330,6 +394,26 @@ export async function createSim(container, opts = {}) {
       addBox(-200, -1050, 900, 40, 120, '#3b4a57');
       addBox(450, 1100, 40, 700, 120, '#3b4a57');
       startPose = { x: 0, z: -300, h: Math.PI / 4 };
+    } else if (name === 'station' && DK) {
+      // ağ döşəmə, stansiya şimal divarına yaxın; qara xətt stansiyanın mərkəzindən çıxır, T zolağı (CAD ölçüləri)
+      dockPose = { x: 0, z: 950, h: 0 };
+      g.fillStyle = '#f1f1ec'; g.fillRect(0, 0, FLOOR_PX, FLOOR_PX);
+      g.strokeStyle = 'rgba(0,0,0,0.05)'; g.lineWidth = 1;
+      for (let i = 0; i <= FLOOR_PX; i += 100 * S) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, FLOOR_PX); g.stroke(); g.beginPath(); g.moveTo(0, i); g.lineTo(FLOOR_PX, i); g.stroke(); }
+      const quad = (pts) => {
+        g.beginPath();
+        pts.forEach(([lx, ly], i) => { const [wx, wz] = dockToWorld(lx, ly); i ? g.lineTo(toPx(wx), toPx(wz)) : g.moveTo(toPx(wx), toPx(wz)); });
+        g.closePath(); g.fill();
+      };
+      g.fillStyle = '#111';
+      // əsas xətt stansiyadan qarşı divara qədər (~2.2 m): avtomatik qayıdışda robot onu tez tapır
+      quad([[-9.5, DK.line_start], [9.5, DK.line_start], [9.5, 2150], [-9.5, 2150]]);
+      quad([[-50, DK.t_y[0] + 0.25], [50, DK.t_y[0] + 0.25], [50, DK.t_y[1] - 0.25], [-50, DK.t_y[1] - 0.25]]);   // T
+      DK.station_polys.forEach((P) => addPoly(P.map(([lx, ly]) => dockToWorld(lx, ly)), DK.station_h, true));
+      stationGroup.position.set(dockPose.x, 0, dockPose.z);
+      stationGroup.rotation.y = dockPose.h;
+      stationGroup.visible = true;
+      startPose = { x: 0, z: 150, h: Math.PI };       // xətt üzərində, stansiyaya tərəf baxır (~80 sm)
     } else {
       arenaR = 720; arenaBorder = 45;
       g.fillStyle = '#26292d'; g.fillRect(0, 0, FLOOR_PX, FLOOR_PX);
@@ -359,10 +443,13 @@ export async function createSim(container, opts = {}) {
     mode: 0, dir: 'S', lastDrive: 0, status: '', grip: 90, elbow: 90,
     dist: 999, distHit: null, ir: [0, 0, 0], blk: [0, 0, 0],
     stalled: 0, ai: { s: 'go', t: 0, turn: 1, last: 0, search: 0 }, t: 0,
+    soc: 0.85, vbat: 8.0, det: false, detSince: 0, dk: { s: 'idle', t0: 0 },
   };
   function resetRobot() {
-    Object.assign(st, { x: startPose.x, z: startPose.z, h: startPose.h, vl: 0, vr: 0, dir: 'S', stalled: 0 });
+    Object.assign(st, { x: startPose.x, z: startPose.z, h: startPose.h, vl: 0, vr: 0, dir: 'S', stalled: 0, det: false, detSince: 0 });
     st.ai = { s: 'go', t: 0, turn: 1, last: 0, search: 0 };
+    st.dk = { s: 'idle', t0: st.t };
+    st.soc = sceneName === 'station' ? 0.3 : 0.85;
     snapCamera();
   }
   function setConfig(k) {
@@ -386,7 +473,8 @@ export async function createSim(container, opts = {}) {
       const a = st.h + (i / 4) * (15 * Math.PI / 180);
       const dx = -Math.sin(a), dz = -Math.cos(a);
       for (const o of statics) {
-        const t = o.kind === 'box' ? rayBox(ox, oz, dx, dz, o) : rayCircle(ox, oz, dx, dz, o.x, o.z, o.r);
+        const t = o.kind === 'box' ? rayBox(ox, oz, dx, dz, o)
+          : o.kind === 'poly' ? rayPoly(ox, oz, dx, dz, o.poly) : rayCircle(ox, oz, dx, dz, o.x, o.z, o.r);
         if (t < best && o.h >= hz - t * TAN15) { best = t; bestDir = [dx, dz]; }
       }
       for (const c of cubes) {
@@ -415,7 +503,169 @@ export async function createSim(container, opts = {}) {
   // ---------- control logic (rejimlər)
   const spd = (v) => (v / 255) * set.maxSpd;
   function drive(l, r) { st.vl = l; st.vr = r; }
+
+  // ---------- rejim 4: şarj stansiyasına qayıt — firmware/smars_dock.h ilə eyni vəziyyət maşını
+  const DP = { spin: 120, seek: 140, seekLeg: 20000, seekStuck: 2500, seekBack: 300, tArm: 700, tConfirm: 40, lost: 700, brake: 180, spinMin: 450, spinTimeout: 6000,
+               revTimeout: 3000, retryFwd: 800, backoff: 1200, maxRetries: 3, safety: 3, tNear: 10, detConfirm: 60, detLoss: 600, kP: 1.6, inner: -20 };
+  const pwm = (l, r) => drive(spd(l), spd(r));
+  function dgo(s) {
+    const d = st.dk; d.s = s; d.t0 = st.t; d.tSince = 0;
+    if (s === 'docked') d.lastDet = st.t;
+    if (s === 'seek') {
+      d.legStart = d.distRefT = st.t; d.distRef = -100; d.backUntil = d.turnUntil = 0; d.turnDir = 1;
+      d.rng = ((d.rng || 0x2545f491) ^ Math.round(st.t)) >>> 0;
+    }
+    if (s === 'spin' || s === 'turn') pwm(DP.spin, -DP.spin);            // yeni vəziyyətin əmri DƏRHAL
+    else if (s === 'center') pwm(-DP.spin, DP.spin);
+    else if (s === 'reverse' || s === 'backoff') pwm(-set.dockRev, -set.dockRev);
+    else if (['stop', 'docked', 'charged', 'idle', 'failed'].includes(s)) pwm(0, 0);
+  }
+  function dockStart() {
+    st.dk = { s: 'idle', t0: st.t, retries: 0, lastDir: 1, lastSeen: st.t };
+    if (st.det) return dgo('docked');
+    return dgo(st.blk.some(Boolean) ? 'follow' : 'seek');
+  }
+  function followDock(c, l, r) {
+    const v = set.lineSpd, inn = (v * DP.inner) / 100;
+    if (c || l || r) {                                         // analoq: sol − sağ qaralıq fərqi
+      const e = Math.max(-1, Math.min(1, (st.ir[1] - st.ir[2]) / 100));
+      const k = DP.kP * e;
+      pwm(Math.min(255, Math.max(inn, v * (1 - k))), Math.min(255, Math.max(inn, v * (1 + k))));
+      st.dk.lastDir = e > 0 ? -1 : 1;
+      return;
+    }
+    const d = st.dk.lastDir || 1;
+    pwm(d * DP.spin * 0.6, -d * DP.spin * 0.6);
+  }
+  function dockUpdate() {
+    const d = st.dk, now = st.t, t = now - d.t0;
+    const [c, l, r] = st.blk;
+    if (st.det) { if (!st.detSince) st.detSince = now; } else st.detSince = 0;
+    const detOk = st.detSince && now - st.detSince >= DP.detConfirm;
+    switch (d.s) {
+      case 'seek': {      // düz gedir; maneədə / ilişəndə: bir az geri + təsadüfi tərəfə ~60°…170° dönür
+        if (c || l || r) { d.lastSeen = now; dgo('follow'); break; }
+        if (d.backUntil > now) { pwm(-DP.seek, -DP.seek); break; }
+        if (d.turnUntil > now) { pwm(d.turnDir * DP.seek, -d.turnDir * DP.seek); break; }
+        // ilişmə enkodersiz: irəli gedərkən HC-SR04 məsafəsi 2.5 san dəyişmir (məs. yanı divara dirənib)
+        if (Math.abs(st.dist - d.distRef) > 2) { d.distRef = st.dist; d.distRefT = now; }
+        const stuck = st.dist < 400 && now - d.distRefT > DP.seekStuck;
+        if (st.dist < 15 || stuck || now - d.legStart >= DP.seekLeg) {
+          d.rng = (Math.imul(d.rng, 1103515245) + 12345) >>> 0;
+          d.backUntil = now + DP.seekBack;
+          d.turnUntil = d.backUntil + 350 + ((d.rng >>> 16) % 600);
+          d.turnDir = (d.rng >>> 27) & 1 ? 1 : -1;
+          d.legStart = d.distRefT = d.turnUntil;
+          pwm(-DP.seek, -DP.seek);
+        } else pwm(DP.seek, DP.seek);
+        break;
+      }
+      case 'follow': case 'retry': {
+        const all = c && l && r;
+        // T: tArm-dan əvvəl yalnız stansiya artıq qarşıdadırsa (HC-SR04 ≤ 10 sm) qəbul olunur
+        if (d.s === 'follow' && all && (t >= DP.tArm || st.dist <= DP.tNear)) {
+          if (!d.tSince) d.tSince = now;
+          if (now - d.tSince >= DP.tConfirm) { dgo('stop'); break; }
+        } else d.tSince = 0;
+        if (d.s === 'follow' && st.dist <= DP.safety) { dgo('stop'); break; }
+        if (d.s === 'retry' && t >= d.retryMs) { dgo('reverse'); break; }
+        if (c || l || r) d.lastSeen = now;
+        if (!(c || l || r) && now - d.lastSeen > DP.lost && d.s === 'follow') { dgo('turn'); break; }
+        followDock(c, l, r);
+        break;
+      }
+      case 'turn':
+        pwm(DP.spin, -DP.spin);
+        if (t > DP.spinMin && c) { d.lastSeen = now; dgo('follow'); } else if (t > DP.spinTimeout) dgo('seek');
+        break;
+      case 'stop':
+        pwm(0, 0);
+        if (t >= DP.brake) { d.phase = 0; dgo('spin'); }
+        break;
+      case 'spin':
+        pwm(DP.spin, -DP.spin);
+        if (d.phase === 0 && !c && t > 120) d.phase = 1;                       // xətdən/T-dən çıxdı
+        else if (d.phase === 1 && c && t > DP.spinMin) { d.phase = 2; d.mark = now; }
+        else if (d.phase === 2 && !c) { d.centerMs = (now - d.mark) / 2; dgo('center'); break; }
+        if (t > DP.spinTimeout) {                    // fırlana bilmir (stansiyaya çox yaxın / ilişib) → geri çəkil, yenidən
+          d.retries = (d.retries || 0) + 1;
+          dgo(d.retries > DP.maxRetries ? 'failed' : 'backoff');
+        }
+        break;
+      case 'backoff':
+        pwm(-set.dockRev, -set.dockRev);
+        if (t >= DP.backoff) { d.lastSeen = now; dgo(c || l || r ? 'follow' : 'seek'); }
+        break;
+      case 'center':
+        pwm(-DP.spin, DP.spin);
+        if (t >= d.centerMs) { d.revLimit = DP.revTimeout; dgo('reverse'); }
+        break;
+      case 'reverse':
+        pwm(-set.dockRev, -set.dockRev);
+        if (detOk) { dgo('docked'); break; }
+        if (t > (d.revLimit || DP.revTimeout)) {
+          d.retries = (d.retries || 0) + 1;
+          if (d.retries > DP.maxRetries) { dgo('failed'); break; }
+          d.retryMs = DP.retryFwd;
+          d.revLimit = DP.revTimeout + (DP.retryFwd * set.lineSpd) / set.dockRev;
+          d.lastSeen = now;
+          dgo('retry');
+        }
+        break;
+      case 'docked':
+        pwm(0, 0);
+        if (!st.det) { if (now - d.lastDet > DP.detLoss) { d.revLimit = 800; dgo('reverse'); } break; }
+        d.lastDet = now;
+        if (st.soc >= 0.995) dgo('charged');
+        break;
+      case 'charged':
+        pwm(0, 0);
+        break;
+      case 'undock':
+        if (t < 1500) followDock(c, l, r); else dgo('idle');
+        break;
+      default:
+        pwm(0, 0);
+    }
+    st.status = DOCK_NAMES[d.s] || '';
+  }
+  // DET: plunjerlər lentə toxunur VƏ mikrovaç basılıb (dok çərçivəsində quyruğun ucu)
+  function computeDet() {
+    if (!dockPose || !DK) return false;
+    const c = Math.cos(dockPose.h), s = Math.sin(dockPose.h);
+    const dx = st.x - dockPose.x, dz = st.z - dockPose.z;
+    const lx = dx * c - dz * s, ly = -(dx * s + dz * c);
+    const dh = Math.atan2(Math.sin(st.h - dockPose.h), Math.cos(st.h - dockPose.h));
+    if (Math.abs(dh) > (4 * Math.PI) / 180) return false;
+    // quyruğun ucu (robotun yerli nöqtəsi (0, tail_end)) dok çərçivəsində: kontakt robotun mərkəzindən yox, quyruqdan asılıdır
+    const tx = lx - DK.tail_end * Math.sin(dh), ty = ly + DK.tail_end * Math.cos(dh);
+    return Math.abs(tx) < 3 && ty <= DK.contact_tail_end && ty <= DK.switch_tail_end;
+  }
+  // batareya: 2S 800 mAh; yük cərəyanı (ESP32 + sensorlar 0.12 A + mühərriklər) və şarj (IP2326: CC 1 A → CV).
+  // Stansiya səhnəsində zaman sürətləndirilir (robotun hərəkəti yox, yalnız batareya): boşalma ×drainX, şarj ×chgX
+  function battery(dt) {
+    const Iload = 0.12 + (0.45 * (Math.abs(st.vl) + Math.abs(st.vr))) / (2 * set.maxSpd);
+    const h = dt / 3600;
+    let Ibat;                                          // batareyanın cərəyanı: + şarj, − boşalma
+    if (st.det) {
+      // IP2326 ~1 A verir: əvvəl robotun öz yükünü qarşılayır, artığı batareyaya gedir; ~90%-dən sonra CV — cərəyan azalır
+      const cc = 1.0 - Iload, cv = st.soc < 0.9 ? Infinity : ((1 - st.soc) / 0.1) * 0.9;
+      Ibat = Math.max(0, Math.min(cc, cv));
+      st.soc += (Ibat * (dockPose ? set.chgX : 1) * h) / 0.8;
+    } else {
+      Ibat = -Iload;
+      st.soc -= (Iload * (dockPose ? set.drainX : 1) * h) / 0.8;
+    }
+    st.soc = Math.max(0, Math.min(1, st.soc));
+    st.vbat = voltsFromPct(st.soc * 100) + 0.12 * Ibat;          // daxili müqavimət ~0.12 Ω
+  }
+
   function controller(dt, now) {
+    if (st.soc <= 0.01 && !st.det) { drive(0, 0); st.status = 'BATAREYA BOŞDUR'; return; }
+    if (st.mode === 4) return dockUpdate();
+    if (st.mode >= 1 && st.mode <= 3 && set.autoHome && dockPose && current.ir.length && st.soc * 100 < set.lowPct) {
+      st.mode = 4; dockStart(); return dockUpdate();                 // batareya azdır → avtomatik qayıdış
+    }
     if (st.mode === 0) {
       st.status = '';
       if (st.dir !== 'S' && now - st.lastDrive > 700) st.dir = 'S';      // ölü-adam dayanması
@@ -494,17 +744,23 @@ export async function createSim(container, opts = {}) {
   // robotun yuxarıdan görünüşü: gövdə+tırtıllar düzbucaqlısı + U-kürəyin iki yan qanadı (CAD ölçüləri)
   function bodyRects() {
     const hw = L.track.x + L.track.half_width, bw = current.half_width, fc = current.front_centre, fm = current.front_max;
-    return [[-hw, hw, L.chassis.rear_y, fc], [-bw, -bw + 6, fc - 8, fm], [bw - 6, bw, fc - 8, fm]];
+    const r = [[-hw, hw, L.chassis.rear_y, fc], [-bw, -bw + 6, fc - 8, fm], [bw - 6, bw, fc - 8, fm]];
+    if (DK) r.push(DK.tail);                       // arxa şarj quyruğu
+    return r;
   }
   const footprints = (x, z, h) => bodyRects().map((r) => rectPoly(x, z, h, r[0], r[1], r[2], r[3]));
+  const hitOne = (P, o) => (o.kind === 'box' || o.kind === 'poly' ? satOverlap(P, o.poly) : polyCircle(P, o.x, o.z, o.r));
+  let colStatics = null;                         // fizika addımında robotun yaxınındakı maneələr (sürətli yoxlama)
   function hitsStatic(Ps) {
-    return Ps.some((P) => statics.some((o) => (o.kind === 'box' ? satOverlap(P, o.poly) : polyCircle(P, o.x, o.z, o.r))));
+    const S = colStatics || statics;
+    return Ps.some((P) => S.some((o) => hitOne(P, o)));
   }
+  const robotR = () => Math.max(...bodyRects().flatMap((r) => [Math.hypot(r[0], r[2]), Math.hypot(r[1], r[2]), Math.hypot(r[0], r[3]), Math.hypot(r[1], r[3])]));
   function cubeHitsStatic(c) {
     const r = c.s * 0.5;
     return statics.some((o) => (o.kind === 'box'
       ? (c.x + r > o.x - o.w / 2 && c.x - r < o.x + o.w / 2 && c.z + r > o.z - o.d / 2 && c.z - r < o.z + o.d / 2)
-      : Math.hypot(c.x - o.x, c.z - o.z) < r + o.r));
+      : o.kind === 'poly' ? polyCircle(o.poly, c.x, c.z, r) : Math.hypot(c.x - o.x, c.z - o.z) < r + o.r));
   }
   function pushCubes(nx, nz, nh) {
     // kublar robotun düzbucaqlısından kənara itələnir; divara sıxılırsa — robot dayanır
@@ -542,6 +798,27 @@ export async function createSim(container, opts = {}) {
     if (cubes.some(cubeHitsStatic)) { moved.forEach(([c, o]) => { c.x = o[0]; c.z = o[1]; }); return false; }
     return true;
   }
+  // Divara toxunan robot onun boyu sürüşür (və bir az fırlanır): huni quyruğu boğaza belə yönəldir, divara yanakı
+  // dəyən robot da ilişib qalmır. Şərt: əmr olunan hərəkət istiqamətində ən azı bir az irəliləmə — düz divara
+  // dirənən robot yana "axmır", dayanır (stalled).
+  // Namizəd düzəlişlər: yana sürüşmə (addım uzunluğuna nisbətən — sürətdən asılı olmasın) və kiçik fırlanma.
+  // Qısa addımlar (f < 1) + fırlanma robotu "düzləndirir": küncü divara dəyən robot itələdikcə ona paralel olur.
+  const G_K = [0.4, 1.0, 2.0], G_A = [0.3, 0.6].map((d) => (d * Math.PI) / 180);
+  const GUIDE = [];
+  for (const k of G_K) GUIDE.push([k, 0], [-k, 0]);
+  for (const a of G_A) GUIDE.push([0, a], [0, -a]);
+  for (const k of [0.4, 1.0]) for (const sk of [1, -1]) for (const sa of [1, -1]) GUIDE.push([sk * k, sa * G_A[0]]);
+  function tryGuided(nx, nz, nh, tryPose) {
+    if (!hitsStatic(footprints(nx, nz, nh))) return false;      // kubla bloklanıb (divarla yox) — sürüşmə yoxdur
+    const L = Math.max(0.3, Math.hypot(nx - st.x, nz - st.z), robotR() * Math.abs(nh - st.h));
+    const c = Math.cos(nh), s = Math.sin(nh);
+    for (const f of [1, 0.5, 0.25, 0.1]) {           // hərəkət istiqamətində ən azı bir az irəliləmə şərtdir
+      const bx = st.x + (nx - st.x) * f, bz = st.z + (nz - st.z) * f, bh = st.h + (nh - st.h) * f;
+      if (f < 1 && tryPose(bx, bz, bh)) return true;  // dayağa qədər qısa addım (yan sürüşməsiz)
+      for (const [k, a] of GUIDE) if (tryPose(bx + k * L * c, bz - k * L * s, bh + a)) return true;
+    }
+    return false;
+  }
   function physics(dt) {
     const v = (st.vl + st.vr) / 2, w = (st.vr - st.vl) / TRACK_W;
     const nh = st.h + w * dt;
@@ -554,8 +831,12 @@ export async function createSim(container, opts = {}) {
       st.x = x; st.z = z; st.h = h; return true;
     };
     if (Math.abs(v) + Math.abs(w) < 1e-6) { st.stalled = 0; return; }
+    const rr = robotR() + Math.abs(v * dt) + 40;
+    colStatics = statics.filter((o) => st.x + rr >= o.bb[0] && st.x - rr <= o.bb[2] && st.z + rr >= o.bb[1] && st.z - rr <= o.bb[3]);
     if (tryPose(nx, nz, nh)) moved = true;
+    else if (tryGuided(nx, nz, nh, tryPose)) moved = true;                // divar / huni boyu sürüşmə
     else if (Math.abs(w) > 1e-6 && tryPose(st.x, st.z, nh)) moved = true;
+    colStatics = null;
     st.stalled = moved ? 0 : st.stalled + dt * 1000;
     // tırtıllar yalnız robot həqiqətən hərəkət edəndə fırlanır (sürüşmə yoxdur)
     if (moved) { st.sL += st.vl * dt; st.sR += st.vr * dt; }
@@ -615,6 +896,7 @@ export async function createSim(container, opts = {}) {
       irDots[i].position.set(st.x + p.x * c - p.y * s, 0.6, st.z - p.x * s - p.y * c);
       irDots[i].material.color.set(st.blk[i] ? '#ff2244' : '#39ff14');
     });
+    if (ledMats.S_led_green) ledMats.S_led_green.emissiveIntensity = st.det ? 1.4 : 0.0;   // "robot oturub"
   }
 
   // ---------- camera
@@ -657,8 +939,10 @@ export async function createSim(container, opts = {}) {
     usT += DT * 1000;
     if (usT >= 60) { usT = 0; measureUS(); }        // HC-SR04 ~16 Hz
     readIR();
+    st.det = computeDet();
     controller(DT, st.t);
     physics(DT);
+    battery(DT);
   }
   function frameLoop(now) {
     if (destroyed) return;
@@ -688,6 +972,8 @@ export async function createSim(container, opts = {}) {
       mode: st.mode, status: st.status, dist: st.dist, rssi: -40, sta: 'brauzer simulyasiyası',
       tankDir: st.mode ? 'AUTO' : ({ F: 'İRƏLİ', B: 'GERİ', L: 'SOL', R: 'SAĞ', S: 'STOP' }[st.dir] || 'STOP'),
       tankSpd: set.tankSpd, gripAngle: st.grip, elbowAngle: st.elbow, sv: 1,
+      bat: Math.round(st.soc * 100), vbat: Math.round(st.vbat * 100) / 100, chg: st.det ? 1 : 0,
+      dock: st.mode === 4 ? (DOCK_NAMES[st.dk.s] || '') : (st.det ? DOCK_NAMES.docked : ''),
     };
     if (current.ir.length) { s.ir = st.ir.slice(0, current.ir.length); s.blk = st.blk.slice(0, current.ir.length); }
     return s;
@@ -699,9 +985,12 @@ export async function createSim(container, opts = {}) {
       case '/settings': return [200, { g: GROUPS, s: SETTINGS_DEF.map((x) => ({ ...x, v: set[x.k] })) }];
       case '/mode': {
         const m = parseInt(g('m'), 10);
-        if (!(m >= 0 && m <= 3)) return [400, 'bad mode'];
+        if (!(m >= 0 && m <= 4)) return [400, 'bad mode'];
         if (m === 2 && !current.ir.length) return [409, 'IR sensor yoxdur (bu konfiqurasiyada)'];
+        if (m === 4 && !current.ir.length) return [409, 'stansiyaya xətt üzrə qayıdır — IR sensorlar lazımdır'];
+        if (m === 4 && !dockPose) return [409, "bu səhnədə şarj stansiyası yoxdur — 'Şarj stansiyası' səhnəsini seçin"];
         st.mode = m; st.dir = 'S'; st.ai = { s: m === 3 ? 'seek' : 'go', t: 0, turn: 1, last: 0, search: 0 };
+        if (m === 4) dockStart(); else st.dk = { s: 'idle', t0: st.t };
         return [200, String(m)];
       }
       case '/tank': {
@@ -757,12 +1046,14 @@ export async function createSim(container, opts = {}) {
         fps, x: Math.round(st.x), z: Math.round(st.z), h: Math.round((((-st.h * 180) / Math.PI) % 360 + 360) % 360),
         v: Math.round(((st.vl + st.vr) / 2)), cubes: cubes.length, out: cubes.filter((c) => c.out).length,
         stalled: st.stalled > 200, mode: st.mode, status: st.status, dist: st.dist, cfg: cfgKey,
+        bat: Math.round(st.soc * 100), vbat: st.vbat, chg: st.det, dock: DOCK_NAMES[st.dk.s] || '',
       };
     },
-    place(x, z, h) { Object.assign(st, { x, z, h, vl: 0, vr: 0, dir: 'S' }); measureUS(); snapCamera(); },
+    setBattery(pct) { st.soc = Math.max(0, Math.min(1, pct / 100)); },
+    place(x, z, h) { Object.assign(st, { x, z, h, vl: 0, vr: 0, dir: 'S' }); measureUS(); readIR(); snapCamera(); },
     // test üçün: simulyasiya zamanını irəli çək (headless rejimdə)
     step(seconds) { const n = Math.round(seconds / DT); for (let i = 0; i < n; i++) tick(); render(); },
-    state() { return { ai: st.ai.s, status: st.status, x: st.x, z: st.z, h: st.h, sL: st.sL, sR: st.sR, ir: st.ir.slice(), blk: st.blk.slice(), dist: st.dist, stalled: st.stalled, cubes: cubes.map((c) => ({ x: c.x, z: c.z, out: c.out })), linePath, arenaR }; },
+    state() { return { dock: st.dk.s, retries: st.dk.retries || 0, soc: st.soc, vbat: st.vbat, det: st.det, dockPose, ai: st.ai.s, status: st.status, x: st.x, z: st.z, h: st.h, sL: st.sL, sR: st.sR, ir: st.ir.slice(), blk: st.blk.slice(), dist: st.dist, stalled: st.stalled, cubes: cubes.map((c) => ({ x: c.x, z: c.z, out: c.out })), linePath, arenaR }; },
     destroy() {
       destroyed = true; if (raf) cancelAnimationFrame(raf); if (ro) ro.disconnect(); controls.dispose();
       if (renderer) { renderer.dispose(); renderer.domElement.remove(); }

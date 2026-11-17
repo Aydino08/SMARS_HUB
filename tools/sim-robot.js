@@ -34,13 +34,14 @@ const SETTINGS_DEF = [
 const GROUPS = [
   { i: 'drive', t: 'Sürüş' }, { i: 'obs', t: 'Maneədən qaçma' }, { i: 'line', t: 'Line following' }, { i: 'servo', t: 'Servo limitləri' },
 ];
-const STATUS_TXT = ['', 'İRƏLİ — YOL AÇIQ', 'XƏTT İZLƏNİR', 'KUB AXTARILIR'];
+const STATUS_TXT = ['', 'İRƏLİ — YOL AÇIQ', 'XƏTT İZLƏNİR', 'KUB AXTARILIR', 'STANSİYAYA GİRİR'];
 
 function startRobot(n) {
   const id = COUNT > 1 ? `${BASE_ID}-${n + 1}` : BASE_ID;
   const name = COUNT > 1 ? `${BASE_NAME} ${n + 1}` : BASE_NAME;
   const s = {
     mode: 0, tankDir: 'STOP', grip: 90, elbow: 90, lastDrive: 0, t: Math.random() * 10,
+    bat: 40 + Math.random() * 50, dockT: 0,
     set: Object.fromEntries(SETTINGS_DEF.map((x) => [x.k, x.d])),
   };
   let ws, tick;
@@ -55,6 +56,17 @@ function startRobot(n) {
       tankDir: s.tankDir, tankSpd: s.set.tankSpd,
       ir: ir.map((x) => Math.round(x * 10) / 10), blk: ir.map((x) => (x > s.set.irThr ? 1 : 0)),
       gripAngle: s.grip, elbowAngle: s.elbow, sv: 1,
+      ...battery(),
+    };
+  }
+  // saxta batareya: rejim 4-də ~4 san sonra "dok olur" və şarj olunur, qalan vaxt yavaş boşalır
+  function battery() {
+    const docked = s.mode === 4 && Date.now() - s.dockT > 4000;
+    s.bat = Math.max(0, Math.min(100, s.bat + (docked ? 0.6 : -0.02)));
+    const v = 6.4 + (2.0 * s.bat) / 100;
+    return {
+      bat: Math.round(s.bat), vbat: Math.round(v * 100) / 100, chg: docked ? 1 : 0,
+      dock: s.mode === 4 ? (docked ? (s.bat >= 99.5 ? 'DOLDU' : 'ŞARJ OLUNUR') : 'STANSİYAYA GİRİR') : '',
     };
   }
 
@@ -64,8 +76,9 @@ function startRobot(n) {
       case '/settings': return [200, { g: GROUPS, s: SETTINGS_DEF.map((x) => ({ ...x, v: s.set[x.k] })) }];
       case '/mode': {
         const m = parseInt(q.get('m'), 10);
-        if (!(m >= 0 && m <= 3)) return [400, 'bad mode'];
+        if (!(m >= 0 && m <= 4)) return [400, 'bad mode'];
         s.mode = m; s.tankDir = m ? 'AUTO' : 'STOP';
+        if (m === 4) s.dockT = Date.now();
         return [200, String(m)];
       }
       case '/tank': {
